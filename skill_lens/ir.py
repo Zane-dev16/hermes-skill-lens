@@ -349,14 +349,27 @@ class ClaimSpan:
     ``line`` is 1-based into the manifest document when the raw SKILL.md
     text was available at extraction time; ``None`` means the span was
     resolved from typed frontmatter alone (quote stays verbatim either way).
+
+    ``start_offset``/``end_offset`` are additive ir/1 fields (D-038) carried
+    ONLY by lexicon spans: character offsets into the exact string the span
+    was mined from (the description text or the body region), satisfying
+    "quote spans verbatim with offsets". They serialize only when set so
+    every field-direct span keeps its historical §7 wire shape byte-exact.
     """
 
     path: str
     line: int | None
     quote: str
+    start_offset: int | None = None
+    end_offset: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"path": self.path, "line": self.line, "quote": self.quote}
+        span = {"path": self.path, "line": self.line, "quote": self.quote}
+        if self.start_offset is not None:
+            span["start_offset"] = self.start_offset
+        if self.end_offset is not None:
+            span["end_offset"] = self.end_offset
+        return span
 
 
 @dataclass(frozen=True)

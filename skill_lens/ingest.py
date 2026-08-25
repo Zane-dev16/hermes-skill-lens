@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from skill_lens.claims import extract_field_direct_claims
+from skill_lens.claims import extract_all_claims
 from skill_lens.diagnostics import (
     DiagnosticsCollector,
 )
@@ -1117,7 +1117,7 @@ def _load_dir_bundle(
         fm_text, fallback_name=identity.name, diags=diags
     )
     claims = (
-        extract_field_direct_claims(
+        extract_all_claims(
             frontmatter,
             manifest_path=files_payload.resolve_skill_doc_rel(),
             skill_md_text=fm_text,
@@ -1356,7 +1356,7 @@ def _load_single_skill_doc(
         diags=diags,
     )
     claims = (
-        extract_field_direct_claims(
+        extract_all_claims(
             frontmatter,
             manifest_path=payload.resolve_skill_doc_rel(),
             skill_md_text=fm_text,
@@ -1549,7 +1549,7 @@ def _load_zip_bundle(
         bundle_hash=compute_bundle_hash(payload.hash_inputs),
         files=tuple(payload.records),
         frontmatter=frontmatter,
-        claims=extract_field_direct_claims(
+        claims=extract_all_claims(
             frontmatter,
             manifest_path=payload.resolve_skill_doc_rel(),
             skill_md_text=fm_text,

@@ -315,6 +315,7 @@ class TestVagueDescriptionDetector:
         assert finding["fingerprint"].startswith("sha256:")
         # Fingerprint excludes line numbers (D-HASH stability across shifts).
         other = self._finding(make_fm(description_raw="Supercharges your workflow."), pack)
+        assert other is not None
         assert other["fingerprint"] == finding["fingerprint"]
 
     def test_concrete_and_unassessable_stay_silent(self, pack) -> None:
@@ -386,11 +387,19 @@ def test_ingest_populates_claims_with_spans(tmp_path: Path) -> None:
     )
     ir = load_bundle(bundle, home=tmp_path)
     capabilities = {claim.capability for claim in ir.claims}
-    assert capabilities == {"filesystem.read", MESSAGING_CLAIM_CAPABILITY}
+    # D-038: "Fetches" now ALSO mines a lexicon network.read claim on top of
+    # the field-direct pair (filesystem.read via read_file, messaging via tag).
+    assert capabilities == {"filesystem.read", MESSAGING_CLAIM_CAPABILITY, "network.read"}
     tool_claim = next(c for c in ir.claims if c.span.quote == "read_file")
     assert tool_claim.span.line == 5
     tag_claim = next(c for c in ir.claims if c.capability == MESSAGING_CLAIM_CAPABILITY)
     assert tag_claim.span.line == 9
+    lexicon_claim = next(c for c in ir.claims if c.capability == "network.read")
+    assert lexicon_claim.kind == "description_phrase"
+    assert lexicon_claim.extractor == "lexicon:v1"
+    assert lexicon_claim.span.quote == "Fetches"
+    assert lexicon_claim.span.line == 3
+    assert (lexicon_claim.span.start_offset, lexicon_claim.span.end_offset) == (0, 7)
 
 
 # ---------------------------------------------------------------------------
@@ -401,8 +410,10 @@ def test_ingest_populates_claims_with_spans(tmp_path: Path) -> None:
 def test_render_inventory_overreach_section(tmp_path: Path) -> None:
     bundle = tmp_path / "skills" / "tools" / "overreach-demo"
     bundle.mkdir(parents=True)
+    # Cue-free AND lexicon-silent prose: this test pins the NO-CLAIMS basis,
+    # so the description must mint zero claims of any extractor (D-038).
     (bundle / "SKILL.md").write_text(
-        "---\nname: overreach-demo\ndescription: Reads your config files.\n---\n",
+        "---\nname: overreach-demo\ndescription: Does helpful things for you.\n---\n",
         encoding="utf-8",
     )
     ir = load_bundle(bundle, home=tmp_path)

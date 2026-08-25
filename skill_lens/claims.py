@@ -5,8 +5,21 @@ to §9.1 capability paths — ``allowed-tools`` entries, ``compatibility``
 phrases, and Hermes ``metadata.hermes`` hint fields (related_skills chains,
 fallback declarations, scheduling/messaging tag clusters). Quote spans are
 preserved verbatim; line numbers resolve only when the raw SKILL.md text is
-supplied (the ingest path always supplies it). **No LLM and no prose lexicon
-here**: description/body mining is lexicon v1 and lands in Phase 1.5.
+supplied (the ingest path always supplies it). **No LLM here** — and the
+lexicon extractor below is equally prose-free: it is a deterministic
+verb-object table match.
+
+Lexicon v1 extraction (§9.2 group 2, live as of Phase 1.5): verb-object
+mining over the description and body regions against the pure-data table in
+:mod:`skill_lens.lexicon`. Matches are advisor-conservative — every family
+needs a SPEC-listed verb stem, and families whose SPEC entry names objects
+also require the object inside a small post-verb window — so "Tracks your
+crypto wallet balances" claims nothing while "Reads your API tokens" claims
+``credentials.read``. Spans carry verbatim quotes plus character offsets
+into the mined string; the §8.2 ``declared`` ×0.5 modifier applies from
+these claims exactly as from field-direct ones (SPEC §8.2 pins the modifier
+to "frontmatter/description/allowed-tools"; PLAN Phase 1.5 states it
+directly).
 
 Overreach primitive: a bundle overreaches exactly where actual capability
 evidence exists that its claims never cover (actual ∧ ¬claimed). When the
@@ -31,18 +44,26 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from skill_lens.ir import (
     CLAIM_KIND_ALLOWED_TOOLS,
     CLAIM_KIND_COMPATIBILITY,
+    CLAIM_KIND_DESCRIPTION_PHRASE,
     CLAIM_KIND_FRONTMATTER_FIELD,
     EXTRACTOR_FIELD_DIRECT,
+    EXTRACTOR_LEXICON_V1,
     ClaimRecord,
     ClaimSpan,
     ResolvedFrontmatter,
     SkillIR,
+)
+from skill_lens.lexicon import (
+    ANY_ACTION_VERB_STEMS,
+    LEXICON_FAMILIES,
+    OBJECT_WINDOW_TOKENS,
+    VERB_SUFFIXES,
 )
 
 # ---------------------------------------------------------------------------
@@ -396,6 +417,228 @@ class _SpanLocator:
             if quote in line:
                 return idx
         return None
+
+
+# ---------------------------------------------------------------------------
+# Lexicon v1 extraction (SPEC §9.2 group 2) — verb-object mining
+# ---------------------------------------------------------------------------
+
+#: Token charset for lexicon mining. Dots stay inside tokens (``.env``,
+#: ``soul.md`` are single objects); hyphens likewise, so ``read-only`` is
+#: never mistaken for the verb ``read``.
+_LEXICON_TOKEN_RE = re.compile(r"[a-z0-9_.\-]+")
+
+
+@dataclass(frozen=True)
+class _LexToken:
+    """One lowercased token with its character span in the mined string.
+
+    ``text`` is the raw slice (offsets stay exact); ``norm`` strips trailing
+    sentence punctuation so ``tokens.`` still matches the stem ``token``.
+    Internal dots survive (``.env``, ``soul.md`` remain single objects).
+    """
+
+    text: str
+    start: int
+    end: int
+
+    @property
+    def norm(self) -> str:
+        return self.text.rstrip(".,;:!?'\"")
+
+
+def _stem_match(token: str, stem: str) -> bool:
+    """``True`` iff *token* is *stem* plus one closed whitelisted suffix.
+
+    "ready" never matches "read"; "running" conservatively misses "run".
+    """
+    return any(token == stem + suffix for suffix in VERB_SUFFIXES)
+
+
+def _split_manifest_body(skill_md_text: str) -> tuple[str, int]:
+    """Body region after the closing ``---`` fence as (text, 1-based line).
+
+    No fences ⇒ the whole document is body. An UNTERMINATED fence mines
+    nothing (malformed manifest — parse diagnostics already own that signal;
+    advisor-safest is silence over guessing region boundaries).
+    """
+    lines = skill_md_text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return skill_md_text, 1
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            offset = sum(len(line) for line in lines[: idx + 1])
+            return skill_md_text[offset:], idx + 2
+    return "", len(lines) + 1
+
+
+class LexiconExtractor:
+    """Deterministic verb-object miner over description/body (§9.2 group 2).
+
+    Pure function of (frontmatter, raw text): same input ⇒ identical claims.
+    One claim per capability — the earliest confident match wins, with the
+    description region mined before the body (tie-break documented in
+    :mod:`skill_lens.lexicon` and DECISIONS D-038).
+    """
+
+    def mine_region(self, text: str) -> dict[str, tuple[int, int]]:
+        """Capability → (start, end) char offsets of its best confident match.
+
+        Tie-breaks (D-038): verb-alone families take the EARLIEST verb
+        occurrence; object-paired families take the SHORTEST verb→object
+        span (tightest quote), earliest start on equal length. Deterministic
+        either way.
+        """
+        tokens = [
+            _LexToken(match.group(0), match.start(), match.end())
+            for match in _LEXICON_TOKEN_RE.finditer(text.lower())
+        ]
+        found: dict[str, tuple[int, int]] = {}
+        for family in LEXICON_FAMILIES:
+            verb_stems = family.verbs if family.verbs else ANY_ACTION_VERB_STEMS
+            best: tuple[int, int] | None = None
+            for index, token in enumerate(tokens):
+                if not any(_stem_match(token.norm, verb) for verb in verb_stems):
+                    continue
+                if not family.objects:
+                    best = (token.start, token.end)
+                    break  # earliest occurrence wins for verb-alone families
+                span = self._pair_object(tokens, index, family.objects)
+                if span is not None and (
+                    best is None
+                    or (span[1] - span[0], span[0])
+                    < (
+                        best[1] - best[0],
+                        best[0],
+                    )
+                ):
+                    best = span
+            if best is not None:
+                found[family.capability] = best
+        return found
+
+    def _pair_object(
+        self,
+        tokens: list[_LexToken],
+        verb_index: int,
+        objects: tuple[str, ...],
+    ) -> tuple[int, int] | None:
+        """Verb→object span inside the post-verb window, or ``None``."""
+        window = tokens[verb_index + 1 : verb_index + 1 + OBJECT_WINDOW_TOKENS]
+        for follower in window:
+            if any(_stem_match(follower.norm, obj) for obj in objects):
+                return (tokens[verb_index].start, follower.end)
+        return None
+
+    def extract(
+        self,
+        frontmatter: ResolvedFrontmatter,
+        *,
+        manifest_path: str = "SKILL.md",
+        skill_md_text: str | None = None,
+    ) -> tuple[ClaimRecord, ...]:
+        """Mine both regions into id-assigned ``description_phrase`` claims.
+
+        Offsets point into the exact string each span was mined from (the
+        description text / the body region); lines resolve against the full
+        manifest when available, folding multi-line descriptions forward.
+        Records sort by ``(capability,)`` before id assignment.
+        """
+        candidates: list[tuple[str, str, int | None, int | None, int | None]] = []
+        description = frontmatter.description_raw
+        if description.strip():
+            for capability, (start, end) in self.mine_region(description).items():
+                line = frontmatter.description_line
+                if line is not None:
+                    line += description.count("\n", 0, start)
+                candidates.append((capability, description[start:end], line, start, end))
+        if skill_md_text is not None:
+            body, body_line = _split_manifest_body(skill_md_text)
+            if body.strip():
+                for capability, (start, end) in self.mine_region(body).items():
+                    candidates.append(
+                        (
+                            capability,
+                            body[start:end],
+                            body_line + body.count("\n", 0, start),
+                            start,
+                            end,
+                        )
+                    )
+        first_per_capability: dict[str, tuple[str, str, int | None, int | None, int | None]] = {}
+        for candidate in candidates:
+            first_per_capability.setdefault(candidate[0], candidate)
+        ordered = sorted(first_per_capability.values(), key=lambda item: item[0])
+        return tuple(
+            ClaimRecord(
+                id=f"C-{index}",
+                kind=CLAIM_KIND_DESCRIPTION_PHRASE,
+                capability=capability,
+                span=ClaimSpan(
+                    path=manifest_path,
+                    line=line,
+                    quote=quote,
+                    start_offset=start,
+                    end_offset=end,
+                ),
+                extractor=EXTRACTOR_LEXICON_V1,
+            )
+            for index, (capability, quote, line, start, end) in enumerate(ordered, start=1)
+        )
+
+
+def extract_lexicon_claims(
+    frontmatter: ResolvedFrontmatter,
+    *,
+    manifest_path: str = "SKILL.md",
+    skill_md_text: str | None = None,
+) -> tuple[ClaimRecord, ...]:
+    """§9.2 group-2 claims alone (lexicon:v1 / description_phrase records)."""
+    return LexiconExtractor().extract(
+        frontmatter,
+        manifest_path=manifest_path,
+        skill_md_text=skill_md_text,
+    )
+
+
+def extract_all_claims(
+    frontmatter: ResolvedFrontmatter,
+    *,
+    manifest_path: str = "SKILL.md",
+    skill_md_text: str | None = None,
+) -> tuple[ClaimRecord, ...]:
+    """Field-direct ∪ lexicon claims — THE ingest seam (D-038).
+
+    A lexicon candidate whose capability a field-direct claim already covers
+    (:func:`is_declared` semantics) is dropped: duplicate coverage adds noise
+    without changing any declared-discount decision. Survivors merge with the
+    field-direct pool, deduplicate on ``(kind, capability, quote)``, sort by
+    ``(capability, kind, quote)`` (D-016 law, now across BOTH pools), and
+    share one id sequence so ids never depend on which extractor spoke first.
+    """
+    field_direct = extract_field_direct_claims(
+        frontmatter,
+        manifest_path=manifest_path,
+        skill_md_text=skill_md_text,
+    )
+    covered = [claim.capability for claim in field_direct]
+    merged: list[ClaimRecord] = []
+    seen: set[tuple[str, str, str]] = set()
+    for claim in (
+        *field_direct,
+        *extract_lexicon_claims(
+            frontmatter, manifest_path=manifest_path, skill_md_text=skill_md_text
+        ),
+    ):
+        if is_declared(claim.capability, covered) and claim.extractor == EXTRACTOR_LEXICON_V1:
+            continue
+        key = (claim.kind, claim.capability, claim.span.quote)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(claim)
+    merged.sort(key=lambda item: (item.capability, item.kind, item.span.quote))
+    return tuple(replace(claim, id=f"C-{index}") for index, claim in enumerate(merged, start=1))
 
 
 # ---------------------------------------------------------------------------
@@ -755,11 +998,14 @@ __all__ = [
     "OverreachEvidence",
     "OverreachRecord",
     "WeightNote",
+    "LexiconExtractor",
     "build_overreach_reports",
     "compute_overreach",
     "description_states_concrete_capability",
     "explain_overreach",
+    "extract_all_claims",
     "extract_field_direct_claims",
+    "extract_lexicon_claims",
     "finding_fingerprint",
     "is_declared",
     "parse_capability",
