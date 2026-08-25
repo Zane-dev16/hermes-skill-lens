@@ -1,0 +1,31 @@
+# E5 — H6: agent-cron persistence at JS AST fidelity (cron/jobs.json).
+id: LNS-JSS-006
+title: "Script writes agent-cron state"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: persistence:cron_json
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.90
+static_only: false
+tags:
+  - hermes-state
+  - cron-write-sink
+remediation: >-
+  Skills must not schedule recurring work by editing cron/jobs.json; route
+  scheduling requests through the user instead.
+rationale: >-
+  One JSON write schedules full-agent execution forever — persistence that
+  survives skill removal without ever appearing in a command (SPEC §17 H6).
+detection: >-
+  Fire per fs write-family site whose target resolves under the
+  agent_home:cron/jobs.json label through the shared §5.1 path
+  normalization (path.join forms combined). Unresolvable jobs.json targets
+  fire reduced at 0.70 when an env marker co-occurs.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-state-tamper
+  negative:
+    - corpus/fixtures/benign/js-cache-cleaner

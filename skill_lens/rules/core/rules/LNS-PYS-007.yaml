@@ -1,0 +1,38 @@
+# E4 — H5/H3 sink half at AST fidelity: config/gateway state and the skills
+# tree are the agent's control plane. Engine-side platform_disabled payload
+# escalation mirrors SHL-006 (no benign authoring story).
+id: LNS-PYS-007
+title: "Script writes agent control-plane or skill-tree state"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: integrity.override:control_plane
+severity: MEDIUM
+weight: 7
+evidence_kind: ast
+confidence_default: 0.85
+static_only: false
+tags:
+  - control-plane
+  - hermes-state
+  - skill-tree-write
+remediation: >-
+  Do not write agent configuration, gateway state, or other skills' files
+  from skill scripts; surface settings to the user instead.
+rationale: >-
+  config.yaml and gateway state gate permissions/platforms/plugin visibility,
+  and the skills tree is the agent's executable control surface — a planted
+  file becomes future behavior (SPEC §17 H3/H5). Reads never fire; only sink
+  sites trigger.
+detection: >-
+  Fire per write sink whose normalized path label resolves to
+  agent_home:<sub> for config.yaml, channel_directory.json, pairing/**, or
+  skills/**. Escalation: when the same FILE carries a platform_disabled /
+  security-tool-disable token, effective severity escalates toward CRITICAL
+  (engine-side, mirrors SHL-006). Unresolvable targets adjacent to those
+  basenames fire at reduced confidence 0.70 with an environment marker.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-config-tamper
+  negative:
+    - corpus/fixtures/benign/self-contained-cache-writer

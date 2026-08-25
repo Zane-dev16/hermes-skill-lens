@@ -1,0 +1,39 @@
+# E4 — H1/H2 primary detection shape at AST fidelity: Python file writes
+# into agent persona/memory state. Mirrors LNS-SHL-004 semantics with
+# open()/write_text sinks instead of shell redirects.
+id: LNS-PYS-005
+title: "Script writes agent persona or memory state"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: persona.write
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.87
+static_only: false
+tags:
+  - hermes-state
+  - persona-write
+  - self-state
+remediation: >-
+  Keep generated content inside the skill root; if editing persona/memory is
+  the documented purpose, say so explicitly in description/compatibility to
+  earn the declared discount.
+rationale: >-
+  SOUL.md and memory files are loaded into the system prompt on every boot
+  and survive skill removal — a write there is durable identity control, not
+  ordinary file output (SPEC §17 H1/H2).
+detection: >-
+  Fire per write sink (open() in write/append mode, Path.write_text/
+  write_bytes, shutil copy/move destinations) whose target classifies to
+  agent_home:<sub> matching SOUL.md/AGENTS.md/CLAUDE.md/.cursorrules/
+  .hermes.md/USER.md/MEMORY.md, memories/**, or any *.md directly under the
+  Hermes home root. Unresolvable targets adjacent to those basenames fire at
+  reduced confidence 0.70 only when an environment/expansion marker
+  co-occurs (§4 conservative treatment). Inside-skill-root writes never fire.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-soul-writer
+  negative:
+    - corpus/fixtures/benign/self-contained-cache-writer

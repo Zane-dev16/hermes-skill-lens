@@ -1,0 +1,5 @@
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-PYS-008"
+severity_band = ["MEDIUM"]

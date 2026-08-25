@@ -1,0 +1,35 @@
+# E5 — R3 exfil shape: sensitive source → network-send flow (same-file §7
+# reachability bar). Plain static posts stay silent — E6 owns endpoints.
+id: LNS-JSS-004
+title: "Sensitive source flows into a network-send sink"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: network.send
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.93
+static_only: false
+tags:
+  - exfil-shape
+  - network-send-sink
+remediation: >-
+  Never transmit environment values or file contents off-device; if remote
+  reporting is the documented purpose, say so explicitly and keep payloads
+  free of credential material.
+rationale: >-
+  process.env reads and fs reads reaching fetch/XHR/axios/sendBeacon bodies
+  is the credential-harvest beacon shape (SPEC §17 R3); endpoint
+  classification itself remains E6's job.
+detection: >-
+  Fire per send site (fetch with any argument, XMLHttpRequest.send after a
+  paired open, axios post/put/patch/request, navigator.sendBeacon) whose
+  argument subtree contains a process.env read, an fs read-family call, or
+  an identifier assigned from one in the same file. Static-payload sends
+  never fire (see the benign lookalike).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-stage-beacon
+  negative:
+    - corpus/fixtures/benign/js-release-helper

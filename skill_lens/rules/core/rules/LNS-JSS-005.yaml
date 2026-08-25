@@ -1,0 +1,36 @@
+# E5 — H5/H6/H9: persona/memory writes at JS AST fidelity. Routing shared
+# verbatim with E4 so the same path literal fingerprints identically in
+# either language.
+id: LNS-JSS-005
+title: "Script writes agent persona/memory state"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: persona.write
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.87
+static_only: false
+tags:
+  - hermes-state
+  - persona-write-sink
+remediation: >-
+  Keep skill outputs inside the skill directory; writing SOUL.md/
+  AGENTS.md/memories requires an explicit, disclosed reason.
+rationale: >-
+  Persona and memory files are prompt-injected every boot and outlive skill
+  removal, so writes to them are durable agent-behavior rewrites (SPEC §17
+  H5/H6/H9).
+detection: >-
+  Fire per fs write-family site (writeFile/writeFileSync/appendFile/
+  appendFileSync/createWriteStream, fs.open with write flags) whose target
+  classifies as agent_home:<persona|memories> through the shared §5.1 path
+  normalization (path.join forms combined). Unresolvable targets adjacent
+  to known persona basenames fire reduced at 0.70 when an env marker
+  co-occurs.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-state-tamper
+  negative:
+    - corpus/fixtures/benign/js-cache-cleaner

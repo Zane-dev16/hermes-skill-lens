@@ -1,0 +1,38 @@
+# E4 — R3 primary shape at AST fidelity: locally collected sensitive input
+# reaching a network-send sink in the same file (the §7 same-file bar).
+id: LNS-PYS-004
+title: "Sensitive source flows into a network-send sink"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: network.send
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.93
+static_only: false
+tags:
+  - exfil-shaped
+  - sensitive-flow
+remediation: >-
+  Never transmit environment contents or unrelated local files; post only
+  fixed, user-visible payloads, and declare network.send if posting is the
+  documented purpose.
+rationale: >-
+  Environment variables and local file reads carry live provider tokens and
+  profile data; posting them outward is the AMOS-style harvest-and-drop
+  chain (SPEC §17 R3). Plain posts of static payloads stay silent — E6 owns
+  endpoint classification.
+detection: >-
+  Fire per send-sink call (requests.post/put/patch/delete/request,
+  urlopen carrying data, socket connect/send family) whose argument subtree
+  contains a sensitive source marker (os.environ subscript/get/getenv,
+  expanduser, open() in read mode, Path.read_* calls) or a name transitively
+  assigned from one within the same file. Degraded mode pairs source-marker
+  lines with send lines within a 15-line window using the same evidence
+  token vocabulary.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-env-exfil
+  negative:
+    - corpus/fixtures/benign/status-ping-notifier

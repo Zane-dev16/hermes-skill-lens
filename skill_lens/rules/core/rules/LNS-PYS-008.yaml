@@ -1,0 +1,35 @@
+# E4 — R11 shape: data destruction aimed outside the bundle. Mirrors
+# LNS-SHL-003 semantics with Python delete sinks; unknown-variable targets
+# take the §4 reduced-confidence treatment.
+id: LNS-PYS-008
+title: "Recursive delete sink aims outside the skill root"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: filesystem.outside
+severity: MEDIUM
+weight: 7
+evidence_kind: ast
+confidence_default: 0.75
+static_only: false
+tags:
+  - data-destruction
+  - filesystem-outside
+remediation: >-
+  Restrict deletion to paths inside the skill root; if cleaning external
+  paths is the documented purpose, declare filesystem reach in description/
+  compatibility to earn the declared discount.
+rationale: >-
+  rmtree/remove against home-relative or absolute targets destroys data far
+  beyond the bundle's remit — sabotage-shaped reach with no self-cleanup
+  story (SPEC §17 R11).
+detection: >-
+  Fire per os.remove/os.unlink/os.rmdir/os.removedirs/shutil.rmtree call
+  whose target classifies outside the skill root (absolute or user-home
+  forms per §5.1 labels) or carries an unresolvable variable (reduced
+  confidence 0.65). Inside-skill-root deletions never fire.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-outside-shredder
+  negative:
+    - corpus/fixtures/benign/self-contained-cache-writer

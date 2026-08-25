@@ -1,0 +1,35 @@
+# E4 — R7 primary shape: decode-to-exec chains hide the payload from review.
+# Same-file dataflow (assignment fixpoint) is the v0.9 reachability bar.
+id: LNS-PYS-002
+title: "Encoded payload decoded straight into an execution sink"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: obfuscation
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.92
+static_only: false
+tags:
+  - decode-chain
+  - obfuscated-payload
+remediation: >-
+  Ship plain code instead of encoded payloads; decode only data and never
+  feed decoders into execution sinks.
+rationale: >-
+  base64/zlib/codecs decoding that flows into exec/eval/system/subprocess/
+  __import__ is the canonical self-unpacking dropper; reviewers cannot see
+  what actually runs (SPEC §17 R7, decode-depth cap 3).
+detection: >-
+  Fire per execution-family call (exec, eval, os.system/os.popen,
+  subprocess run/call/check_call/check_output/popen, __import__) whose
+  argument subtree contains a decoder call (base64.b64decode family,
+  binascii.a2b_base64, zlib.decompress, codecs.decode) directly or via a
+  same-file assignment from one. Decoding DATA without an execution sink on
+  the same file never fires (see the benign lookalike).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-staged-loader
+  negative:
+    - corpus/fixtures/benign/py-data-decoder-docs

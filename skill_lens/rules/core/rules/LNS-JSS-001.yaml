@@ -1,0 +1,37 @@
+# E5 — R4/R7 primary shape: dynamic code execution over runtime-derived
+# input (eval / Function constructor / vm.runIn*Context). AST evidence band
+# 0.85-0.95; literal-string bodies stay silent (reviewable as-is).
+id: LNS-JSS-001
+title: "Dynamic code execution sink over runtime-derived input"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: execute.code
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.90
+static_only: false
+tags:
+  - dynamic-exec
+  - execute-code-sink
+remediation: >-
+  Replace eval/Function/vm execution with explicit logic or JSON.parse for
+  data; if executing generated code is the documented purpose, say so
+  explicitly in description/compatibility to earn the declared discount.
+rationale: >-
+  eval/new Function/vm.runIn* over non-literal input executes bytes no
+  reviewer can see at audit time — the classic staged-loader primitive
+  (SPEC §17 R4/R7).
+detection: >-
+  Fire per site whose resolved callee is bare eval, a Function constructor,
+  or vm.runIn*Context and whose first argument is not a pure literal
+  (string, hole-free template, number, bool, null). Literal-only arguments
+  never fire. AST mode resolves require/import aliases; degraded mode
+  matches the same rule id with line heuristics that skip quoted-literal
+  arguments.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-stage-beacon
+  negative:
+    - corpus/fixtures/benign/js-release-helper

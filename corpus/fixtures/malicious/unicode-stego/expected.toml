@@ -1,0 +1,9 @@
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-TXT-001"
+severity_band = ["MEDIUM", "HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-TXT-004"
+severity_band = ["MEDIUM"]

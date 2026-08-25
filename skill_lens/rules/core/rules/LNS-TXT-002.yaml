@@ -1,0 +1,39 @@
+# E2 — homoglyph/confusable identity spoofing closing the invisibility-only
+# gap (SPEC §4 row E2). TR39-style skeleton transform over a hand-curated
+# lookalike table (sources cited in DECISIONS D-037); protected vocabulary =
+# persona basenames + agent identity words. static_only per §7: pattern in
+# prose, no executable path demonstrated.
+id: LNS-TXT-002
+title: "Homoglyph-confusable impersonates protected name"
+rule_version: "1"
+status: active
+engine: textinject
+capability: obfuscation
+severity: MEDIUM
+weight: 7
+evidence_kind: unicode
+confidence_default: 0.75
+static_only: true
+tags:
+  - homoglyph
+  - confusables
+  - mixed-script
+remediation: >-
+  Rewrite the token with plain ASCII (or the genuinely intended script);
+  mixed-script lookalikes of persona/config names read as impersonation.
+rationale: >-
+  A Cyrillic-о SOUL.md reference or a Latin+Cyrillic identifier survives
+  casual review while steering agents toward the wrong target — the same
+  deception class as invisible text, minus the invisibility.
+detection: >-
+  Per line, tokenize into identifier-like runs; fire when a token's skeleton
+  (NFKC -> casefold -> confusable map) equals a protected vocabulary term
+  (SOUL.md, AGENTS.md, CLAUDE.md, .cursorrules, .hermes.md, MEMORY.md,
+  USER.md, system, assistant, developer, administrator, hermes) while the raw
+  form differs, or when one token mixes Latin letters with Cyrillic/Greek.
+  Pure single-script non-Latin text never fires.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/persona-homoglyph-note
+  negative:
+    - corpus/fixtures/benign/emoji-rich-i18n-notes

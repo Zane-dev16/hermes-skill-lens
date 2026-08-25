@@ -61,7 +61,7 @@ def test_findings_sorted_and_numbered_sequentially(pack, tmp_path) -> None:
     ]
     assert isinstance(result, ScanResult)
     assert result.rule_pack_name == "core"
-    assert result.rule_pack_version == "2026.08.2"
+    assert result.rule_pack_version == "2026.08.5"
     assert result.rule_pack_checksum.startswith("sha256:")
 
 

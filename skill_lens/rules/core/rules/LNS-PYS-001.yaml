@@ -1,0 +1,35 @@
+# E4 — R4/R7 primary shape: dynamic code execution over runtime-derived
+# input. AST evidence band 0.85-0.95; literal-string exec/eval stays silent
+# (the executed code is reviewable as-is).
+id: LNS-PYS-001
+title: "Dynamic code execution sink over runtime-derived input"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: execute.code
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.90
+static_only: false
+tags:
+  - dynamic-exec
+  - execute-code-sink
+remediation: >-
+  Replace exec/eval with explicit logic or ast.literal_eval for data; if
+  executing generated code is the documented purpose, say so explicitly in
+  description/compatibility to earn the declared discount.
+rationale: >-
+  exec/eval over non-literal input executes bytes no reviewer can see at
+  audit time — the classic staged-loader primitive (SPEC §17 R4/R7).
+detection: >-
+  Fire per call site whose resolved callee is bare exec or eval and whose
+  first positional argument is not a pure literal (string without
+  interpolation, number, bool, None). Literal-only arguments never fire.
+  AST mode resolves through import aliases; degraded mode matches the same
+  rule id with a line heuristic that skips quoted-literal arguments.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-staged-loader
+  negative:
+    - corpus/fixtures/benign/py-data-decoder-docs

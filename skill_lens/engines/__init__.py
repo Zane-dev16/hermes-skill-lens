@@ -17,11 +17,10 @@ targets are supported by re-reading members into an in-memory context map;
 dir targets hand engines the real bundle directory so evidence lines
 resolve exactly.
 
-Engines absent from this module remain the sanctioned xfail state of the
-corpus harness; rules bound to a REGISTERED engine but missing from its
-``RULE_IDS`` surface as ``LNS-ENG-001`` diagnostics instead of failing
-silently. Shipped today: E1 manifest, E3 shellscan, E6 netgraph, E7
-secretscan (E2/E4/E5/E8 land in later Phase-1 implementers).
+Shipped today: E1 manifest, E2 textinject (pure-Python Unicode/ghost-stream
+scanner — grammar-free, so its degraded mode IS the primary mode), E3
+shellscan, E4 pyscan + E5 jsscan (AST + golden-tested line-scanner fallback),
+E6 netgraph, E7 secretscan (E8 lands in a later Phase-1.5+ implementer).
 """
 
 from __future__ import annotations
@@ -47,9 +46,18 @@ from skill_lens.engines.base import (
 from skill_lens.engines.e1_manifest import ENGINE_NAME as MANIFEST_ENGINE_NAME
 from skill_lens.engines.e1_manifest import RULE_IDS as MANIFEST_RULE_IDS
 from skill_lens.engines.e1_manifest import ManifestEngine
+from skill_lens.engines.e2_textinject import ENGINE_NAME as TEXTINJECT_ENGINE_NAME
+from skill_lens.engines.e2_textinject import RULE_IDS as TEXTINJECT_RULE_IDS
+from skill_lens.engines.e2_textinject import TextInjectEngine
 from skill_lens.engines.e3_shellscan import ENGINE_NAME as SHELLSCAN_ENGINE_NAME
 from skill_lens.engines.e3_shellscan import RULE_IDS as SHELLSCAN_RULE_IDS
 from skill_lens.engines.e3_shellscan import ShellScanEngine
+from skill_lens.engines.e4_pyscan import ENGINE_NAME as PYSCAN_ENGINE_NAME
+from skill_lens.engines.e4_pyscan import RULE_IDS as PYSCAN_RULE_IDS
+from skill_lens.engines.e4_pyscan import PyScanEngine
+from skill_lens.engines.e5_jsscan import ENGINE_NAME as JSSCAN_ENGINE_NAME
+from skill_lens.engines.e5_jsscan import RULE_IDS as JSSCAN_RULE_IDS
+from skill_lens.engines.e5_jsscan import JsScanEngine
 from skill_lens.engines.e6_netgraph import ENGINE_NAME as NETGRAPH_ENGINE_NAME
 from skill_lens.engines.e6_netgraph import RULE_IDS as NETGRAPH_RULE_IDS
 from skill_lens.engines.e6_netgraph import NetgraphEngine
@@ -116,6 +124,10 @@ def _manifest_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector
     return _dispatch_one(ManifestEngine(rules), ir, diagnostics, slot_name=MANIFEST_ENGINE_NAME)
 
 
+def _textinject_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector) -> list[dict]:
+    return _dispatch_one(TextInjectEngine(rules), ir, diagnostics, slot_name=TEXTINJECT_ENGINE_NAME)
+
+
 def _secretscan_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector) -> list[dict]:
     return _dispatch_one(SecretScanEngine(rules), ir, diagnostics, slot_name=SECRETSCAN_ENGINE_NAME)
 
@@ -126,6 +138,14 @@ def _netgraph_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector
 
 def _shellscan_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector) -> list[dict]:
     return _dispatch_one(ShellScanEngine(rules), ir, diagnostics, slot_name=SHELLSCAN_ENGINE_NAME)
+
+
+def _pyscan_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector) -> list[dict]:
+    return _dispatch_one(PyScanEngine(rules), ir, diagnostics, slot_name=PYSCAN_ENGINE_NAME)
+
+
+def _jsscan_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector) -> list[dict]:
+    return _dispatch_one(JsScanEngine(rules), ir, diagnostics, slot_name=JSSCAN_ENGINE_NAME)
 
 
 def _dispatch_one(
@@ -146,16 +166,22 @@ def _dispatch_one(
 REGISTRY: dict[str, Any] = {
     MANIFEST_ENGINE_NAME: _manifest_entry,
     NETGRAPH_ENGINE_NAME: _netgraph_entry,
+    PYSCAN_ENGINE_NAME: _pyscan_entry,
     SECRETSCAN_ENGINE_NAME: _secretscan_entry,
     SHELLSCAN_ENGINE_NAME: _shellscan_entry,
+    JSSCAN_ENGINE_NAME: _jsscan_entry,
+    TEXTINJECT_ENGINE_NAME: _textinject_entry,
 }
 
 #: Engine name -> (implementation class, implemented rule ids).
 ENGINE_IMPLEMENTATIONS: dict[str, tuple[type, frozenset[str]]] = {
     MANIFEST_ENGINE_NAME: (ManifestEngine, frozenset(MANIFEST_RULE_IDS)),
     NETGRAPH_ENGINE_NAME: (NetgraphEngine, frozenset(NETGRAPH_RULE_IDS)),
+    PYSCAN_ENGINE_NAME: (PyScanEngine, frozenset(PYSCAN_RULE_IDS)),
     SECRETSCAN_ENGINE_NAME: (SecretScanEngine, frozenset(SECRETSCAN_RULE_IDS)),
     SHELLSCAN_ENGINE_NAME: (ShellScanEngine, frozenset(SHELLSCAN_RULE_IDS)),
+    JSSCAN_ENGINE_NAME: (JsScanEngine, frozenset(JSSCAN_RULE_IDS)),
+    TEXTINJECT_ENGINE_NAME: (TextInjectEngine, frozenset(TEXTINJECT_RULE_IDS)),
 }
 
 

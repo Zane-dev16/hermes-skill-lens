@@ -1,0 +1,35 @@
+# E5 — H1/H2 shape: interpreter-mediated shell sinks via child_process.
+# exec/execSync are shell-mediated by definition; spawn fires only with
+# shell:true or an interpreter -c argv. Fixed argv stays silent.
+id: LNS-JSS-003
+title: "Shell-mediated child_process execution sink"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: execute.shell
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.88
+static_only: false
+tags:
+  - child-process
+  - shell-sink
+remediation: >-
+  Use execFile/spawn with fixed argv arrays and shell:false; if running
+  shell commands is the documented purpose, say so explicitly in
+  description/compatibility to earn the declared discount.
+rationale: >-
+  child_process exec/execSync interpolate arbitrary strings into a shell —
+  injection-shaped control rather than a fixed command surface (SPEC §17
+  H1/H2).
+detection: >-
+  Fire per call resolved to child_process.exec or .execSync (always), or
+  child_process.spawn/.spawnSync carrying a literal truthy shell option or
+  an [interpreter, "-c", ...] argv pair. Fixed argv lists without shell:true
+  never fire (the declared-capability safe pattern).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-stage-beacon
+  negative:
+    - corpus/fixtures/benign/js-release-helper

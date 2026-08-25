@@ -1,0 +1,43 @@
+# E2 — R1/R7 primary detection shape: hidden Unicode channels (SPEC §4 row
+# E2). Presence is a binary fact (MEDIUM base); the engine escalates
+# effective severity to HIGH when the channel is in ACTIVE use — a Tags
+# payload decoding to instruction-bearing ASCII, or bidi controls embedded
+# mid-line (RLO filename/command spoofing). DECISIONS D-037.
+id: LNS-TXT-001
+title: "Hidden Unicode steganography channel in text"
+rule_version: "1"
+status: active
+engine: textinject
+capability: obfuscation
+severity: MEDIUM
+weight: 7
+evidence_kind: unicode
+confidence_default: 0.85
+static_only: true
+tags:
+  - unicode-stego
+  - invisible-chars
+  - ghost-text
+remediation: >-
+  Remove invisible codepoints from all bundled text; if hidden content was
+  intentional, surface it as visible, reviewable text instead.
+rationale: >-
+  Zero-width, Tags-block, and bidi characters are invisible in every normal
+  editor and renderer, so they are the canonical carrier for instructions the
+  reviewer never sees; the Hermes host guard strips only 18 such characters,
+  and this class set is wider and decodes what it finds.
+detection: >-
+  One finding per file containing any counted invisible-class codepoint:
+  zero-width U+200B-U+200D, word joiner U+2060, mid-text BOM U+FEFF, marks
+  U+200E/U+200F, bidi overrides U+202A-U+202E, isolates U+2066-U+2069, Tags
+  block U+E0000-U+E007F. Sanctioned positions exempt: BOM at text start,
+  ZWJ between astral emoji (emoji ZWJ sequences), ZWNJ inside
+  Indic/Arabic-script typography. Evidence = sorted class histogram; engine
+  escalation marker (+decoded-instruction / +bidi-inline) rides the same
+  token when the channel decodes or spoofs.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/unicode-stego
+    - corpus/fixtures/malicious/bidi-spoofed-command
+  negative:
+    - corpus/fixtures/benign/emoji-rich-i18n-notes

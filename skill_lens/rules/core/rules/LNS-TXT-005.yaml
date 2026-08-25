@@ -1,0 +1,39 @@
+# E2 — self-state instructional variants named verbatim in SPEC §4 row E2
+# ("edit your SOUL", "remember that…", "create a cron job that…"). Prose
+# directives sit at the §17 calibration band (conf <=0.55, static unless
+# corroborated); sink-side writes remain E3/E4/E5 territory — this rule
+# catches instructions addressed to the agent even when no script exists.
+id: LNS-TXT-005
+title: "Prose directive targets agent self-state"
+rule_version: "1"
+status: active
+engine: textinject
+capability: persona.write
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.55
+static_only: true
+tags:
+  - persona-write
+  - self-state
+  - prose-directive
+remediation: >-
+  Rephrase documentation so it describes files instead of instructing the
+  agent to edit its own persona/memory/scheduler state.
+rationale: >-
+  SOUL.md and memory state are loaded as identity every boot; imperative
+  prose telling the agent to edit them is persona poisoning by instruction,
+  needing no sink at all.
+detection: >-
+  Imperative families over every text view: persona-edit verbs + possessive
+  target ("edit/update/rewrite your SOUL/persona/identity/memories"),
+  memory implantation ("remember that you are/must/should..."), scheduler
+  directives ("create a cron job that..."), and write-this-directive shapes.
+  Documentation ABOUT self-state files without an agent-addressed imperative
+  stays silent.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/persona-homoglyph-note
+  negative:
+    - corpus/fixtures/benign/local-journal-writer

@@ -1,0 +1,34 @@
+# E5 — R7 primary shape: decode-to-exec chains hide the payload from review.
+# Same-file dataflow (assignment fixpoint) is the v0.9 reachability bar.
+id: LNS-JSS-002
+title: "Encoded payload decoded straight into an execution sink"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: obfuscation
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.92
+static_only: false
+tags:
+  - decode-chain
+  - obfuscated-payload
+remediation: >-
+  Ship plain code instead of encoded payloads; decode only data and never
+  feed atob/Buffer decoders into execution sinks.
+rationale: >-
+  base64 decoding that flows into exec/execSync/spawn/eval/Function/vm is
+  the canonical self-unpacking dropper; reviewers cannot see what actually
+  runs (SPEC §17 R7).
+detection: >-
+  Fire per execution-family site (child_process exec/execSync/spawn/
+  spawnSync, eval, Function constructor, vm.runIn*) whose argument subtree
+  contains an atob() or Buffer-from-base64 decode directly or via a
+  same-file assignment from one. Decoding DATA without an execution sink on
+  the same file never fires (see the benign lookalike).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-stage-beacon
+  negative:
+    - corpus/fixtures/benign/js-release-helper

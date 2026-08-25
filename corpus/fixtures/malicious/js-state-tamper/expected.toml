@@ -1,0 +1,17 @@
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-JSS-005"
+severity_band = ["HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-JSS-006"
+severity_band = ["HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-JSS-007"
+severity_band = ["MEDIUM", "CRITICAL"]
+
+[[expect_rules]]
+rule_id = "LNS-JSS-008"
+severity_band = ["MEDIUM"]

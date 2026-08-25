@@ -1,0 +1,37 @@
+# E4 — R4 shape: interpreter-mediated shell execution from Python. Fixed
+# argv lists without shell=True are the declared-capability safe pattern and
+# never fire (see the benign lookalike).
+id: LNS-PYS-003
+title: "Interpreter-mediated shell execution sink"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: execute.shell
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.88
+static_only: false
+tags:
+  - shell-sink
+  - subprocess
+remediation: >-
+  Use fixed argv lists without shell=True; if shell access is the documented
+  purpose, declare execute.shell in description/compatibility to earn the
+  declared discount.
+rationale: >-
+  os.system/popen, subprocess with shell=True, and sh -c argv shapes route a
+  command STRING through an interpreter — injection-shaped control rather
+  than a fixed argument vector (SPEC §17 R4).
+detection: >-
+  Fire per call resolving to os.system/os.popen/commands.getoutput family,
+  subprocess getoutput family, or subprocess run/call/check_call/
+  check_output/Popen invoked with shell=True or an argv list whose first two
+  elements are an interpreter name plus its -c flag. Plain fixed argv lists
+  (e.g. ["git", "status"]) without shell=True never fire.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-shell-runner
+    - corpus/fixtures/malicious/py-staged-loader
+  negative:
+    - corpus/fixtures/benign/git-status-reporter

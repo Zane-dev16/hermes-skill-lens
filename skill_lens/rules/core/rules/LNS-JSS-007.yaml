@@ -1,0 +1,35 @@
+# E5 — H2/H9: control-plane/gateway/skill-tree writes at JS AST fidelity,
+# with the engine-side platform_disabled escalation (mirrors PYS-007).
+id: LNS-JSS-007
+title: "Script writes agent control-plane/skill-tree state"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: integrity.override:control_plane
+severity: MEDIUM
+weight: 7
+evidence_kind: ast
+confidence_default: 0.85
+static_only: false
+tags:
+  - hermes-state
+  - control-plane-write-sink
+remediation: >-
+  Keep skill outputs inside the skill directory; config.yaml, gateway
+  state, and skills/** are permission surfaces owned by the user.
+rationale: >-
+  Control-plane files gate permissions, platforms, and future behavior;
+  skills/** IS the executable control surface (SPEC §17 H2/H9). A
+  platform_disabled token has no benign authoring story and escalates the
+  finding to CRITICAL effective severity engine-side.
+detection: >-
+  Fire per fs write-family site whose target resolves under config.yaml /
+  channel_directory.json / pairing/** / skills/** agent_home labels through
+  the shared §5.1 normalization (path.join forms combined). Any
+  platform_disabled token anywhere in the file escalates effective severity
+  toward CRITICAL. Unresolvable config-basename targets fire reduced 0.70.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-state-tamper
+  negative:
+    - corpus/fixtures/benign/js-cache-cleaner

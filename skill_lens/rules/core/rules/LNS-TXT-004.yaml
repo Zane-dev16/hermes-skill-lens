@@ -1,0 +1,42 @@
+# E2 — R2 primary detection shape: prompt-injection grammars (SPEC §4 row
+# E2). Uncorroborated instruction semantics cap at MEDIUM per §4 FP posture;
+# static_only per §7 (pattern in prose). Grammars run over raw lines, the
+# clean view, and the decoded Tags payload, so zero-width-split instructions
+# are still found.
+id: LNS-TXT-004
+title: "Prompt-injection grammar or role-tag forgery"
+rule_version: "1"
+status: active
+engine: textinject
+capability: integrity.override
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.65
+static_only: true
+tags:
+  - prompt-injection
+  - roletag-spoof
+  - override-imperative
+remediation: >-
+  Remove injected role tags / override imperatives; legitimate integration
+  docs quote model syntax without issuing directives to the agent.
+rationale: >-
+  Bundled text is agent-read context; chat-template sentinels (<|im_start|>),
+  fake SYSTEM headers, and ignore-previous imperatives are the standard
+  grammar of attempts to override the host agent from inside a skill.
+detection: >-
+  Regex family over every text view: chat-template role-tag spoofing
+  (<|im_start|>/<|endoftext|>/[INST]/<<SYS>>/Gemma turn tags/tool-call
+  sentinel), fake system-prompt framing (line-anchored SYSTEM:/ASSISTANT:/#
+  System headers, "you are now unrestricted", "no longer bound"), override
+  imperatives ("ignore/disregard previous instructions", "new instructions:",
+  "from now on"), and extraction demands ("reveal your system prompt").
+  Evidence = pattern id + sanitized normalized span (fingerprint-stable).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/im-start-hijack
+    - corpus/fixtures/malicious/escape-stream-beacon
+    - corpus/fixtures/malicious/unicode-stego
+  negative:
+    - corpus/fixtures/benign/terminal-color-reporter

@@ -13,17 +13,57 @@
 #               deferred to the source→sink taint phase so credentials.read
 #               evidence can be correlated, not merely present.
 name: core
-version: "2026.08.2"
+version: "2026.08.5"
 spec_version: rule-pack/1
 description: >-
-  Core detection pack v0.1 for Hermes Skill Lens: seventeen rules across the
-  four Phase-1 engines (E1 manifest, E3 shellscan, E6 netgraph, E7
-  secretscan) plus the claims-stage vague-description rule, selected from
-  the SPEC §17 Hermes-precedent threat matrix. Every rule ships with >=1
-  true-positive golden fixture and >=1 benign lookalike negative fixture
-  under corpus/fixtures/.
+  Core detection pack v0.1 for Hermes Skill Lens: thirty-seven rules across
+  the seven Phase-1/1.5 engines (E1 manifest, E2 textinject, E3 shellscan,
+  E4 pyscan, E5 jsscan, E6 netgraph, E7 secretscan) plus the claims-stage
+  vague-description rule, selected from the SPEC §17 Hermes-precedent threat
+  matrix. Every rule ships with >=1 true-positive golden fixture and >=1
+  benign lookalike negative fixture under corpus/fixtures/.
 rules_dir: rules
 changelog:
+  - version: "2026.08.5"
+    date: "2026-08-25"
+    notes:
+      - "Add engine E2 textinject (pure-Python Unicode scanner — grammar-"
+      - "free; degraded mode IS the primary mode): LNS-TXT-001 hidden"
+      - "Unicode steganography channel MED w/ active-use escalation to HIGH"
+      - "effective (decoded-instruction payload / inline bidi spoofing),"
+      - "LNS-TXT-002 homoglyph-confusable impersonation MED (TR39-style"
+      - "skeleton, subset table per D-037), LNS-TXT-003 terminal escape-"
+      - "sequence covert channels MED (OSC/DCS/APC/PM/SOS; SGR exempt),"
+      - "LNS-TXT-004 prompt-injection grammar / role-tag forgery MED"
+      - "(uncorroborated cap), LNS-TXT-005 self-state prose directives"
+      - "MED conf 0.55. Sanitization law: all evidence passes safe_text so"
+      - "no raw control byte reaches reports. Fixtures: unicode-stego,"
+      - "bidi-spoofed-command, persona-homoglyph-note, escape-stream-beacon,"
+      - "im-start-hijack malicious x5 + emoji-rich-i18n-notes and terminal-"
+      - "color-reporter benign twins."
+  - version: "2026.08.4"
+    date: "2026-08-25"
+    notes:
+      - "Add engine E5 jsscan (AST + golden-tested line-scanner fallback):"
+      - "LNS-JSS-001 eval/Function/vm dynamic-exec sink HIGH, LNS-JSS-002"
+      - "atob/Buffer decode-to-exec chain HIGH (obfuscation), LNS-JSS-003"
+      - "child_process shell sink HIGH, LNS-JSS-004 sensitive-source→send"
+      - "flow HIGH, LNS-JSS-005 persona/memory write HIGH, LNS-JSS-006"
+      - "cron/jobs.json write HIGH, LNS-JSS-007 control-plane/skill-tree"
+      - "write MED w/ platform_disabled escalation, LNS-JSS-008 outside-root"
+      - "delete sink MED. Hermes-state routing shared verbatim with E4."
+      - "Fixtures: js-* malicious x2 + js benign lookalikes x2."
+  - version: "2026.08.3"
+    date: "2026-08-25"
+    notes:
+      - "Add engine E4 pyscan (AST + golden-tested line-scanner fallback):"
+      - "LNS-PYS-001 dynamic exec/eval sink HIGH, LNS-PYS-002 decode-to-exec"
+      - "chain HIGH (obfuscation), LNS-PYS-003 interpreter shell sink HIGH,"
+      - "LNS-PYS-004 sensitive-source→network-send flow HIGH, LNS-PYS-005"
+      - "persona/memory write HIGH, LNS-PYS-006 cron/jobs.json write HIGH,"
+      - "LNS-PYS-007 control-plane/skill-tree write MED w/ platform_disabled"
+      - "escalation, LNS-PYS-008 outside-root delete sink MED."
+      - "Fixtures: py-* malicious x7 + py benign lookalikes x4."
   - version: "2026.08.2"
     date: "2026-08-25"
     notes:

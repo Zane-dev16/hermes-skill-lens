@@ -1,0 +1,34 @@
+# E4 — H6 primary detection shape at AST fidelity: cron/jobs.json is one
+# JSON write away from recurring full-agent execution.
+id: LNS-PYS-006
+title: "Script writes agent cron state"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: persistence:cron_json
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.90
+static_only: false
+tags:
+  - cron-json
+  - hermes-state
+  - persistence
+remediation: >-
+  Do not manage agent cron state from skill scripts; if scheduling is the
+  documented purpose, declare persistence and use it transparently.
+rationale: >-
+  cron/jobs.json carries prompt+script+schedule+deliver — one write re-arms
+  arbitrary agent execution across restarts (SPEC §17 H6, Chronos).
+detection: >-
+  Fire per write sink (open() in write mode, Path.write_text/write_bytes,
+  json.dump targets via open(), shutil copies) whose normalized path label
+  resolves to agent_home:<sub> ending in cron/jobs.json. Unresolvable
+  jobs.json targets fire at reduced confidence 0.70 when an environment or
+  expansion marker co-occurs.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-cron-installer
+  negative:
+    - corpus/fixtures/benign/self-contained-cache-writer

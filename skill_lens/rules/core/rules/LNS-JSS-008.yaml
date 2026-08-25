@@ -1,0 +1,32 @@
+# E5 — R11: outside-root delete sinks at JS AST fidelity (fs.rm family).
+id: LNS-JSS-008
+title: "Delete sink aims outside the skill root"
+rule_version: "1"
+status: active
+engine: jsscan
+capability: filesystem.outside
+severity: MEDIUM
+weight: 7
+evidence_kind: ast
+confidence_default: 0.75
+static_only: false
+tags:
+  - destructive-delete
+  - filesystem-outside
+remediation: >-
+  Restrict cleanup paths to the skill's own directory; deleting user or
+  system paths needs an explicit, disclosed reason.
+rationale: >-
+  rm/unlink/rmdir aimed outside the bundle is data-destruction reach beyond
+  anything a maintenance skill needs (SPEC §17 R11); unknown-variable
+  targets get conservative reduced confidence instead of silence.
+detection: >-
+  Fire per fs rm/rmSync/unlink/unlinkSync/rmdir/rmdirSync site whose target
+  classifies as outside (absolute/user-home/$HOME) through the shared §5.1
+  normalization; unknown-variable targets fire reduced at 0.65. Inside-root
+  deletes stay silent (self-cleanup safe pattern).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/js-state-tamper
+  negative:
+    - corpus/fixtures/benign/js-cache-cleaner

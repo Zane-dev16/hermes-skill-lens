@@ -41,7 +41,15 @@ def pack():
 
 
 def test_registered_engines_satisfy_protocol(pack) -> None:
-    assert available_engines() == {"manifest", "netgraph", "secretscan", "shellscan"}
+    assert available_engines() == {
+        "jsscan",
+        "manifest",
+        "netgraph",
+        "pyscan",
+        "secretscan",
+        "shellscan",
+        "textinject",
+    }
     for name in sorted(available_engines()):
         impl_class = engines_pkg.ENGINE_IMPLEMENTATIONS[name][0]
         engine = impl_class(pack.rules_by_engine()[name])

@@ -1,0 +1,9 @@
+category = "productivity"
+
+[[expect_rules]]
+rule_id = "LNS-TXT-002"
+severity_band = ["MEDIUM"]
+
+[[expect_rules]]
+rule_id = "LNS-TXT-005"
+severity_band = ["MEDIUM"]

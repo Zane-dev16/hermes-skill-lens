@@ -1,0 +1,37 @@
+# E2 — ghost-text ANSI-stream detection (SPEC §5.1 decode ladder "ghost
+# text" stream; task mandate: OSC 777/8, DCS/APC packet injection). Cosmetic
+# SGR color stays exempt; non-printing terminal channels carry data the
+# reviewer never sees. static_only per §7 (presence, not execution).
+id: LNS-TXT-003
+title: "Terminal escape-sequence covert channel"
+rule_version: "1"
+status: active
+engine: textinject
+capability: obfuscation
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.85
+static_only: true
+tags:
+  - ansi-escape
+  - osc
+  - covert-channel
+remediation: >-
+  Remove OSC/DCS/APC/PM/SOS sequences from bundled text; render links and
+  notifications as plain visible markdown instead.
+rationale: >-
+  Terminal escape channels (OSC 8 hyperlinks, OSC 777 notifications, DCS/APC
+  packets) smuggle payloads past visual review into scrollback and terminal
+  emulators — a ghost-text lane alongside Unicode steganography.
+detection: >-
+  Fire per sequence over all decoded text views: OSC ... BEL|ST (evidence
+  carries the numeric selector when parsable), DCS, APC, PM, SOS ... ST.
+  Evidence tokens are channel shapes only — packet bodies are never quoted;
+  they feed the LNS-TXT-004 grammar scan instead. CSI sequences (SGR color,
+  cursor moves) are exempt as cosmetic.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/escape-stream-beacon
+  negative:
+    - corpus/fixtures/benign/terminal-color-reporter
