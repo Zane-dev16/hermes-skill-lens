@@ -1,0 +1,43 @@
+# Hermes Skill Lens — plugin manifest (v2).
+---
+#
+# Field names are exactly the known fields of hermes_cli/plugins.py
+# (_KNOWN_MANIFEST_FIELDS, lines ~656-668; SUPPORTED_MANIFEST_VERSION = 2).
+# Unknown fields warn-and-continue on the host; we ship known fields only.
+#
+# NOTE ON NAME VS KEY: for flat directory plugins the host derives the
+# registry key from the manifest `name` (see PluginManager._parse_manifest:
+# `key = f"{prefix}/{plugin_dir.name}" if prefix else name`). The key drives
+# `plugins.enabled`, the `plugins.entries.<key>.settings.*` config namespace,
+# and the plugin-data directory — SPEC §10 mandates those namespaces as
+# `plugins.entries.lens.settings.*`, so `name` here MUST stay `lens`.
+# The human-facing brand ("Skill Lens") lives in description/tags/homepage.
+name: lens
+manifest_version: 2
+api_version: 1
+version: "0.9.0a0"
+description: >-
+  Skill Lens ("A lens, not a bouncer.") — advisor-only security scanner for
+  agent skill bundles. Deterministic claimed-vs-actual capability diff with
+  evidence-cited findings and a recomputable trust score. Registers observer
+  hooks only (on_skill_lifecycle, post_tool_call, transform_tool_result);
+  never blocks an install, never opens a network socket, never requires an
+  LLM in its default path.
+author: "Irell Zane"
+license: MIT
+homepage: https://github.com/Zane-dev16/hermes-skill-lens
+tags:
+  - security
+  - skills
+  - static-analysis
+  - deterministic
+  - advisor
+provides_hooks:
+  - on_skill_lifecycle
+  - post_tool_call
+  - transform_tool_result
+# Declaration seam ONLY (host validates + warns, never auto-installs —
+# hermes_cli/plugins.py python_dependencies handling / SPEC D-PARSE).
+# PyYAML backs SKILL.md frontmatter parsing in skill_lens.ingest.
+python_dependencies:
+  - PyYAML
