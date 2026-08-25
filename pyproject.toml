@@ -31,7 +31,12 @@ dependencies = []
 Homepage = "https://github.com/Zane-dev16/hermes-skill-lens"
 
 [tool.setuptools]
-packages = ["skill_lens"]
+packages = ["skill_lens", "skill_lens.engines"]
+
+# The embedded core rule pack travels as package data so installed copies
+# load offline (D-RULEOWN); the repo checkout IS the plugin artifact.
+[tool.setuptools.package-data]
+skill_lens = ["rules/core/pack.yaml", "rules/core/rules/*.yaml"]
 
 [tool.ruff]
 line-length = 100
