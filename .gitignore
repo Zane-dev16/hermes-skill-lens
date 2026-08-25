@@ -1,0 +1,8 @@
+build-state/*.py
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+dist/
+*.egg-info/
