@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Distribution name per SPEC header: import package skill_lens, distribution
+# skill-lens. The repo (hermes-skill-lens) IS the Hermes plugin artifact; this
+# pyproject exists for metadata + tooling config, not for pip installs of the
+# plugin itself.
+name = "skill-lens"
+version = "0.9.0a0"
+description = "Skill Lens — deterministic, advisor-only security scanner for Hermes agent skill bundles. A lens, not a bouncer."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Irell Zane" }]
+keywords = ["hermes", "agent", "skills", "security", "static-analysis"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Zane-dev16/hermes-skill-lens"
+
+[tool.setuptools]
+packages = ["skill_lens"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E",  # pycodestyle errors
+  "W",  # pycodestyle warnings
+  "F",  # pyflakes
+  "I",  # isort
+  "UP", # pyupgrade
+  "B",  # flake8-bugbear
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+# Type checker: resolve repo-root packages (skill_lens, tests) for LSP/pyright.
+[tool.pyright]
+extraPaths = ["."]
