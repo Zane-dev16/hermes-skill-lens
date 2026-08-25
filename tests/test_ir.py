@@ -127,6 +127,7 @@ def test_canonical_dict_top_level_spec_keys() -> None:
     manifest_keys = {
         "name",
         "description_raw",
+        "description_line",  # additive ir/1 (D-016): LNS-MAN-004 evidence line
         "allowed_tools",
         "compatibility",
         "vendor_fields",
@@ -163,14 +164,23 @@ def test_file_record_serialization_round_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Claims shell
+# Claims (field-direct extractor live since the claims step, SPEC §9.2)
 # ---------------------------------------------------------------------------
 
 
-def test_extract_claims_is_empty_until_phase_1() -> None:
+def test_extract_claims_maps_allowed_tools() -> None:
     ir = make_sample_ir()
-    assert extract_claims(ir) == ()
-    assert ir.canonical_dict()["claims"] == []
+    claims = extract_claims(ir)
+    capabilities = {claim.capability for claim in claims}
+    assert capabilities == {"filesystem.read", "execute.shell"}
+    assert all(claim.extractor == "field-direct" for claim in claims)
+    assert [claim.id for claim in claims] == sorted(claim.id for claim in claims)
+    # Spans resolved without raw SKILL.md text carry verbatim quotes but no
+    # fabricated line numbers.
+    assert {claim.span.line for claim in claims} == {None}
+    # IRs constructed WITH the extracted claims round-trip canonically.
+    populated = make_sample_ir(claims=claims)
+    assert populated.canonical_dict()["claims"] == [claim.to_dict() for claim in claims]
 
 
 # ---------------------------------------------------------------------------

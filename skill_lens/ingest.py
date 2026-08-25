@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from skill_lens.claims import extract_field_direct_claims
 from skill_lens.diagnostics import (
     DiagnosticsCollector,
 )
@@ -1115,6 +1116,15 @@ def _load_dir_bundle(
     frontmatter = _resolve_frontmatter_or_fallback(
         fm_text, fallback_name=identity.name, diags=diags
     )
+    claims = (
+        extract_field_direct_claims(
+            frontmatter,
+            manifest_path=files_payload.resolve_skill_doc_rel(),
+            skill_md_text=fm_text,
+        )
+        if frontmatter is not None
+        else ()
+    )
     if frontmatter is not None and frontmatter.name != identity.name:
         diags.warning(
             CODE_FRONT_NAME_MISMATCH,
@@ -1130,7 +1140,7 @@ def _load_dir_bundle(
         files=tuple(files_payload.records),
         provenance=provenance,
         frontmatter=frontmatter,
-        claims=(),
+        claims=claims,
         decoded_views=(),
         notes=tuple(files_payload.notes),
         diagnostics=diags,
@@ -1171,6 +1181,12 @@ class _FilesPayload:
         if not self.skill_doc_candidates:
             return None
         return min(self.skill_doc_candidates, key=lambda item: (item[0].count("/"), item[0]))[1]
+
+    def resolve_skill_doc_rel(self) -> str:
+        """Rel-path of the shallowest SKILL.md candidate (display label)."""
+        if not self.skill_doc_candidates:
+            return _SKILL_DOC
+        return min(self.skill_doc_candidates, key=lambda item: (item[0].count("/"), item[0]))[0]
 
 
 def _read_collected_files(
@@ -1276,7 +1292,41 @@ def _resolve_frontmatter_or_fallback(
             name=fallback_name,
             validation_errors=("frontmatter missing or unparsable",),
         )
-    return build_frontmatter(mapping, fallback_name=fallback_name, diagnostics=diags)
+    resolved = build_frontmatter(mapping, fallback_name=fallback_name, diagnostics=diags)
+    description_line = _locate_description_line(text)
+    if description_line is not None:
+        resolved = ResolvedFrontmatter(
+            name=resolved.name,
+            description_raw=resolved.description_raw,
+            description_line=description_line,
+            allowed_tools=resolved.allowed_tools,
+            compatibility=resolved.compatibility,
+            vendor_fields=resolved.vendor_fields,
+            hermes=resolved.hermes,
+            validation_errors=resolved.validation_errors,
+            unknown_fields=resolved.unknown_fields,
+        )
+    return resolved
+
+
+def _locate_description_line(text: str) -> int | None:
+    """1-based line of the ``description`` key inside the frontmatter block.
+
+    Pure text scan (no YAML round-trip): first block line whose stripped form
+    starts with ``description:``. ``None`` when absent — LNS-MAN-004 evidence
+    locations degrade to path-only spans honestly.
+    """
+    lines = text.splitlines()
+    end = len(lines)
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            end = idx
+            break
+    for idx in range(0, min(end, len(lines))):
+        stripped = lines[idx].strip()
+        if stripped.startswith("description") and ":" in stripped:
+            return idx + 1
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1299,10 +1349,20 @@ def _load_single_skill_doc(
     payload = _FilesPayload()
     if data:
         _absorb_inline(payload, [(_SKILL_DOC, data)], ceilings=ceilings, diags=diags)
+    fm_text = payload.resolve_skill_doc_text()
     frontmatter = _resolve_frontmatter_or_fallback(
-        payload.resolve_skill_doc_text(),
+        fm_text,
         fallback_name=path.parent.name or _SKILL_DOC,
         diags=diags,
+    )
+    claims = (
+        extract_field_direct_claims(
+            frontmatter,
+            manifest_path=payload.resolve_skill_doc_rel(),
+            skill_md_text=fm_text,
+        )
+        if frontmatter is not None
+        else ()
     )
     if frontmatter is not None and frontmatter.name != (path.parent.name or _SKILL_DOC):
         diags.warning(
@@ -1321,6 +1381,7 @@ def _load_single_skill_doc(
         bundle_hash=compute_bundle_hash(payload.hash_inputs),
         files=tuple(payload.records),
         frontmatter=frontmatter,
+        claims=claims,
         notes=tuple(payload.notes),
         diagnostics=diags,
     )
@@ -1472,8 +1533,9 @@ def _load_zip_bundle(
     except OSError as exc:
         diags.error(CODE_INGEST_ZIP, f"zip unreadable: {exc.strerror}", path=as_given)
 
+    fm_text = payload.resolve_skill_doc_text()
     frontmatter = _resolve_frontmatter_or_fallback(
-        payload.resolve_skill_doc_text(),
+        fm_text,
         fallback_name=Path(as_given).stem or path.stem,
         diags=diags,
     )
@@ -1487,6 +1549,13 @@ def _load_zip_bundle(
         bundle_hash=compute_bundle_hash(payload.hash_inputs),
         files=tuple(payload.records),
         frontmatter=frontmatter,
+        claims=extract_field_direct_claims(
+            frontmatter,
+            manifest_path=payload.resolve_skill_doc_rel(),
+            skill_md_text=fm_text,
+        )
+        if frontmatter is not None
+        else (),
         notes=tuple(payload.notes),
         diagnostics=diags,
     )

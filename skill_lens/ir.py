@@ -25,7 +25,7 @@ the ``unknown_fields`` mapping of the owning section and a warning
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +34,14 @@ from skill_lens.diagnostics import (
     Diagnostic,
     DiagnosticsCollector,
 )
+
+
+def _render_overreach_section(claimed_paths: Iterable[str], actual_paths: Iterable[str]) -> str:
+    """Lazy claims-module bridge (module-cycle safety: claims imports ir)."""
+    from skill_lens.claims import render_overreach_section
+
+    return render_overreach_section(claimed_paths, actual_paths)
+
 
 #: Version pinned to SPEC §5.2. Breaking changes bump the tool major version.
 IR_SPEC_VERSION = "ir/1"
@@ -259,6 +267,10 @@ class ResolvedFrontmatter:
 
     name: str
     description_raw: str = ""
+    #: 1-based line of the ``description`` key in SKILL.md when the raw text
+    #: was available at parse time (additive ir/1 per DECISIONS D-008/D-016;
+    #: consumed by LNS-MAN-004 evidence locations). ``None`` = unresolved.
+    description_line: int | None = None
     allowed_tools: tuple[str, ...] = ()
     compatibility: str | None = None
     vendor_fields: Mapping[str, Any] = field(default_factory=dict)
@@ -274,6 +286,7 @@ class ResolvedFrontmatter:
         return {
             "name": self.name,
             "description_raw": self.description_raw,
+            "description_line": self.description_line,
             "allowed_tools": list(self.allowed_tools),
             "compatibility": self.compatibility,
             "vendor_fields": dict(self.vendor_fields),
@@ -309,28 +322,81 @@ def report_unknown_fields(
     return created
 
 
-# -- claims shell (extractor arrives Phase 1) ----------------------------------
+# -- claims (SPEC §7 claim-record schema; extraction lives in claims.py) -------
+
+#: Claim ``kind`` vocabulary (SPEC §7). ``description_phrase`` claims arrive
+#: with lexicon v1 (Phase 1.5); field-direct extraction emits the other three.
+CLAIM_KIND_FRONTMATTER_FIELD = "frontmatter_field"
+CLAIM_KIND_DESCRIPTION_PHRASE = "description_phrase"
+CLAIM_KIND_COMPATIBILITY = "compatibility"
+CLAIM_KIND_ALLOWED_TOOLS = "allowed_tools"
+CLAIM_KINDS: tuple[str, ...] = (
+    CLAIM_KIND_FRONTMATTER_FIELD,
+    CLAIM_KIND_DESCRIPTION_PHRASE,
+    CLAIM_KIND_COMPATIBILITY,
+    CLAIM_KIND_ALLOWED_TOOLS,
+)
+
+#: Extraction methods (SPEC §7 ``extractor``). Lexicon v1 lands Phase 1.5.
+EXTRACTOR_FIELD_DIRECT = "field-direct"
+EXTRACTOR_LEXICON_V1 = "lexicon:v1"
+
+
+@dataclass(frozen=True)
+class ClaimSpan:
+    """Verbatim quote location of a claim (SPEC §7 ``span``).
+
+    ``line`` is 1-based into the manifest document when the raw SKILL.md
+    text was available at extraction time; ``None`` means the span was
+    resolved from typed frontmatter alone (quote stays verbatim either way).
+    """
+
+    path: str
+    line: int | None
+    quote: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"path": self.path, "line": self.line, "quote": self.quote}
 
 
 @dataclass(frozen=True)
 class ClaimRecord:
-    """Placeholder claim record — Phase 0 shell ONLY.
+    """One declared capability, quoted verbatim from its source (SPEC §7).
 
-    The Phase 1 field-direct extractor (SPEC §9.2 group 1) replaces this
-    stub's shape with the real schema; until then the IR carries an empty
-    claims list and nothing else may construct instances in-product.
+    Field-direct construction happens exclusively in
+    :mod:`skill_lens.claims`; everything downstream (overreach diff,
+    declared-discount math, ``lens map``) consumes these records.
     """
 
-    capability: str
-    source: str = ""
+    id: str  # "C-N", assigned post-sort so ids are input-deterministic
+    kind: str  # CLAIM_KINDS member
+    capability: str  # §9.1 path, optional ":" subpath
+    span: ClaimSpan
+    extractor: str  # EXTRACTOR_* member
 
     def to_dict(self) -> dict[str, Any]:
-        return {"capability": self.capability, "source": self.source}
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "capability": self.capability,
+            "span": self.span.to_dict(),
+            "extractor": self.extractor,
+        }
 
 
-def extract_claims(_ir: SkillIR) -> tuple[ClaimRecord, ...]:
-    """Empty Phase 0 extractor — real extraction lands in Phase 1 (§9.2)."""
-    return ()
+def extract_claims(ir: SkillIR) -> tuple[ClaimRecord, ...]:
+    """Field-direct extraction over *ir*'s manifest (SPEC §9.2 group 1).
+
+    Delegates to :func:`skill_lens.claims.extract_field_direct_claims` via a
+    lazy import (module-cycle safety: ``claims`` imports these types). Spans
+    resolved here carry ``line=None`` because the raw SKILL.md text is not
+    retained on the IR; the ingest path extracts with text and precise lines.
+    """
+    if ir.frontmatter is None:
+        return ()
+    from skill_lens.claims import extract_field_direct_claims
+
+    return extract_field_direct_claims(ir.frontmatter)
 
 
 # -- root record ----------------------------------------------------------------
@@ -399,12 +465,21 @@ class SkillIR:
 # -- Phase 0 human surface ------------------------------------------------------
 
 
-def render_inventory(ir: SkillIR) -> str:
+def render_inventory(
+    ir: SkillIR,
+    *,
+    actual_capabilities: Iterable[str] | None = None,
+) -> str:
     """Minimal stable-text inventory dump (PLAN day-2 "inventory dump works").
 
     Plain text, no color, stable ordering: files are emitted in ascending
     ``path`` order (stable sort), sections in fixed order. Reads only
     deterministic fields, so two renders of equal IRs are byte-identical.
+
+    ``actual_capabilities`` — engine evidence of what the bundle actually
+    does — is OPTIONAL: when supplied, a deterministic overreach section
+    (SPEC §9.2/§9.3) renders right after the claims line; the default
+    ``None`` keeps byte-compatibility with Phase 0 output.
     """
     lines: list[str] = [
         f"bundle: {ir.identity.name}",
@@ -436,6 +511,9 @@ def render_inventory(ir: SkillIR) -> str:
             f" trust_level={prov.trust_level or 'null'}"
         )
     lines.append(f"claims: {len(ir.claims)}")
+    if actual_capabilities is not None:
+        claimed = [claim.capability for claim in ir.claims]
+        lines.extend(_render_overreach_section(claimed, actual_capabilities).splitlines())
     lines.append(f"decoded_views: {len(ir.decoded_views)}")
     lines.append(f"notes: {len(ir.notes)}")
     snapshots = ir.diagnostics.snapshot()
