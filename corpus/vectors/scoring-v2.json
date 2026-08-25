@@ -1,0 +1,50 @@
+{
+  "A": {
+    "grade": "A",
+    "needs_review": false,
+    "score": 100,
+    "verdict": "clean"
+  },
+  "B": {
+    "grade": "A",
+    "needs_review": false,
+    "score": 91,
+    "verdict": "notice"
+  },
+  "C": {
+    "grade": "F",
+    "needs_review": false,
+    "score": 25,
+    "verdict": "alert"
+  },
+  "C-prime": {
+    "grade": "D",
+    "needs_review": true,
+    "score": 40,
+    "verdict": "warn"
+  },
+  "D": {
+    "grade": "B",
+    "needs_review": false,
+    "score": 85,
+    "verdict": "notice"
+  },
+  "E": {
+    "grade": "C",
+    "needs_review": false,
+    "score": 80,
+    "verdict": "warn"
+  },
+  "F": {
+    "grade": "B",
+    "needs_review": false,
+    "score": 83,
+    "verdict": "notice"
+  },
+  "G": {
+    "grade": "C",
+    "needs_review": false,
+    "score": 70,
+    "verdict": "warn"
+  }
+}
