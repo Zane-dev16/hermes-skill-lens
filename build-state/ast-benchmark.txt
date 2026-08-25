@@ -1,0 +1,75 @@
+==============================================================================
+AST vs regex evidence benchmark - Hermes Skill Lens Phase 1.5 exit
+==============================================================================
+fixtures : 52 total (30 malicious / 22 benign), core pack core 2026.08.5
+modes    : ast   = tree-sitter grammars loaded (delivery lanes normal)
+           regex = grammar import forced unavailable (line-scanner fallback)
+
+Per-rule true positives (malicious expected-rule hits vs expected.toml)
+------------------------------------------------------------------------------
+engine       rule_id        expected    ast  regex
+jsscan       LNS-JSS-001           1      1      1
+jsscan       LNS-JSS-002           1      1      1
+jsscan       LNS-JSS-003           1      1      1
+jsscan       LNS-JSS-004           1      1      1
+jsscan       LNS-JSS-005           1      1      1
+jsscan       LNS-JSS-006           1      1      1
+jsscan       LNS-JSS-007           1      1      1
+jsscan       LNS-JSS-008           1      1      1
+manifest     LNS-MAN-001           1      1      1
+manifest     LNS-MAN-002           1      1      1
+manifest     LNS-MAN-003           1      1      1
+manifest     LNS-MAN-004           1      1      1
+manifest     LNS-MAN-005           1      1      1
+manifest     LNS-MAN-007           1      1      1
+netgraph     LNS-NET-011           1      1      1
+netgraph     LNS-NET-012           1      1      1
+netgraph     LNS-NET-013           1      1      1
+pyscan       LNS-PYS-001           3      3      1
+pyscan       LNS-PYS-002           1      1      1
+pyscan       LNS-PYS-003           3      3      2
+pyscan       LNS-PYS-004           1      1      1
+pyscan       LNS-PYS-005           1      1      1
+pyscan       LNS-PYS-006           1      1      1
+pyscan       LNS-PYS-007           1      1      1
+pyscan       LNS-PYS-008           1      1      1
+secretscan   LNS-SEC-001           1      1      1
+secretscan   LNS-SEC-002           1      1      1
+shellscan    LNS-SHL-001           1      1      1
+shellscan    LNS-SHL-002           1      1      1
+shellscan    LNS-SHL-003           1      1      1
+shellscan    LNS-SHL-004           1      1      1
+shellscan    LNS-SHL-005           1      1      1
+shellscan    LNS-SHL-006           1      1      1
+textinject   LNS-TXT-001           2      2      2
+textinject   LNS-TXT-002           1      1      1
+textinject   LNS-TXT-003           1      1      1
+textinject   LNS-TXT-004           3      3      3
+textinject   LNS-TXT-005           1      1      1
+TOTAL                             45     45     42
+Fixture-level disagreements
+------------------------------------------------------------------------------
+benign/lint-blocked-pattern-docs             ast=[] regex=['LNS-PYS-001', 'LNS-PYS-003']
+malicious/py-aliased-eval                    ast-only: LNS-PYS-001
+malicious/py-getattr-exec                    ast-only: LNS-PYS-001
+malicious/py-stringattr-shell                ast-only: LNS-PYS-003
+
+False positives on benign fixtures (deduped finding counts)
+------------------------------------------------------------------------------
+engine       rule_id           ast  regex
+pyscan       LNS-PYS-001         0      2
+pyscan       LNS-PYS-003         0      2
+TOTAL                            0      4
+
+Scan latency per fixture (advisory telemetry; wall-clock varies by run)
+------------------------------------------------------------------------------
+mode           p95-ms  median-ms     max-ms
+ast               8.8        6.2        9.0
+regex             9.0        6.2       10.1
+
+Exit math (PLAN §1 Phase 1.5: AST evidence must beat regex on the
+FP corpus at equal TP):
+  TP(ast)=45 >= TP(regex)=42: OK
+  FP(ast)=0 <  FP(regex)=4: OK
+
+VERDICT: PASS - AST evidence beats regex at equal-or-better TP.
