@@ -37,7 +37,15 @@ provides_hooks:
   - post_tool_call
   - transform_tool_result
 # Declaration seam ONLY (host validates + warns, never auto-installs —
-# hermes_cli/plugins.py python_dependencies handling / SPEC D-PARSE).
-# PyYAML backs SKILL.md frontmatter parsing in skill_lens.ingest.
+# hermes_cli/plugins.py::_warn_python_dependencies lines 4679-4720, invoked
+# at :4027; SPEC D-PARSE). PyYAML backs SKILL.md frontmatter parsing in
+# skill_lens.ingest. tree-sitter backs the AST engines' grammar lane
+# (Phase 1.5); a host without them degrades to the golden-tested
+# line-scanner fallback (skill_lens.parsing.ParserGateway), and repo-
+# vendored wheels under wheels/ are the second-chance lane.
 python_dependencies:
   - PyYAML
+  - tree-sitter>=0.24,<0.27
+  - tree-sitter-python>=0.23,<0.26
+  - tree-sitter-javascript>=0.23,<0.26
+  - tree-sitter-bash>=0.23,<0.26
