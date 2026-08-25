@@ -1,0 +1,38 @@
+# E1 — H4 config keys: metadata.hermes.config entries targeting sensitive
+# namespaces are written into config.yaml AT INSTALL TIME by the host.
+# Stronger than the other H4 facts (a write happens) -> MEDIUM top of the
+# structural band; feeds the integrity ceiling.
+id: LNS-MAN-007
+title: "Install-time config declaration targets a sensitive settings namespace"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override:control_plane
+severity: MEDIUM
+weight: 7
+evidence_kind: manifest
+confidence_default: 0.93
+static_only: false
+tags:
+  - control-plane
+  - config-write
+  - hermes-dialect
+remediation: >-
+  Declare only innocuous namespaced config keys (e.g. theme defaults scoped
+  to this skill), never keys under approval, permissions, platform, or
+  plugin/tool enable lists.
+rationale: >-
+  Config entries persist beyond the skill's own files and can pre-approve
+  tools or disable platforms before first use; there is no benign story for a
+  skill shipping approval-shaped defaults.
+detection: >-
+  For each key in metadata.hermes.config (dot-path aware), fire when any path
+  segment matches (?i)(approve|permission|allow|deny|platform|disabled|
+  api[_-]?key|token|secret|credential) or when the key collides with a
+  reserved Hermes namespace prefix (plugins.entries.*, security.*, hooks.*).
+  One finding per offending key.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/metadata-abuse
+  negative:
+    - corpus/fixtures/benign/rich-legit-metadata

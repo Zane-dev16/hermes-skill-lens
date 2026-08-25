@@ -1,0 +1,39 @@
+# E3 — H1/H2 primary detection shape: writes into agent self-state that is
+# prompt-injected every boot (SOUL.md, context files, memories). Path-sink
+# evidence band 0.85-0.95; HIGH undeclared (§17 calibration note).
+id: LNS-SHL-004
+title: "Script writes into agent persona or memory state"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: persona.write
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.85
+static_only: false
+tags:
+  - persona-write
+  - self-state
+  - hermes-state
+remediation: >-
+  Keep generated content inside the skill root; if editing persona/memory is
+  the documented purpose, say so explicitly in description/compatibility to
+  earn the declared discount.
+rationale: >-
+  SOUL.md and memory files are loaded into the system prompt on every boot
+  and survive skill removal — a write there is durable identity control, not
+  ordinary file output.
+detection: >-
+  Fire per sink site (>, >>, tee, cp/mv destination, heredoc target, sed -i)
+  whose normalized path label resolves to agent_home:<sub> where sub matches
+  SOUL.md, AGENTS.md, CLAUDE.md, .cursorrules, .hermes.md, USER.md,
+  MEMORY.md, memories/** (persona.write:memory), or any *.md directly under
+  the Hermes home root. Writes inside_skill_root never fire. Unknown-path
+  writes adjacent to those basenames fire at reduced confidence 0.65-0.75
+  (§4 conservative treatment).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/soul-poisoner
+  negative:
+    - corpus/fixtures/benign/local-journal-writer

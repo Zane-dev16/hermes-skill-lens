@@ -1,0 +1,36 @@
+# E1 — H4 metadata.hermes abuse: unknown keys inside the host-consumed
+# dialect. Presence-factual, LOW (heuristic; §17 caps structural E1 LOW-MED).
+id: LNS-MAN-002
+title: "Unknown key inside metadata.hermes"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override:deceptive_metadata
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.92
+static_only: false
+tags:
+  - deceptive-metadata
+  - hermes-dialect
+remediation: >-
+  Use only documented metadata.hermes keys (tags, related_skills, category,
+  requires/fallback toolset+tool lists, config); move custom data out of the
+  host-consumed namespace.
+rationale: >-
+  metadata.hermes keys are consumed by Hermes logic; unknown keys are either
+  future grammar drift or an attempt to smuggle instructions past review.
+  Tolerate-and-record stays advisory (LOW) because most unknown keys are
+  benign authoring drift.
+detection: >-
+  Fire once per unknown key under metadata.hermes after validating against
+  the observed Hermes grammar (skill_lens.ir.HermesMetadata known-key set,
+  dash/underscore tolerant). Location = the key's line in the frontmatter
+  block; fingerprint normalizes only the key name (never the value — values
+  may be secret-bearing and must not widen the redaction surface).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/metadata-abuse
+  negative:
+    - corpus/fixtures/benign/rich-legit-metadata

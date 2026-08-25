@@ -1,0 +1,40 @@
+# E1/claims-stage — R10 deceptive-vs-silent description: the manifest states
+# NO concrete capability (SPEC §9.2). SPEC calls it INFO; the rule loader
+# pins severities to the §8.2 tiers (D-012), so it ships LOW (rendered NOTE).
+# Hosted by skill_lens.claims until engine E1 lands, which takes ownership
+# unchanged (DECISIONS D-020). Omission marker, NOT an integrity attempt:
+# scoring must not arm the §8 integrity ceiling on this finding alone.
+id: LNS-MAN-004
+title: "Description states no concrete capabilities"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override:deceptive_metadata
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: true
+tags:
+  - claims
+  - overreach-basis
+  - vague-description
+remediation: >-
+  State what the skill actually does in plain capability verbs (fetch, save,
+  send, schedule); a description that constrains nothing makes every real
+  capability formally undisclosed.
+rationale: >-
+  Vague marketing copy extracts zero specific claims, so any actual
+  capability is formally overreach; flagging the silence keeps the
+  claimed-vs-actual diff honest without accusing the author (§9.2).
+detection: >-
+  Fire once when description_raw contains no §9.2-family capability cue
+  (stem/prefix match over CAPABILITY_CUES in skill_lens.claims). Empty or
+  missing descriptions fire too. Location = the description key's line;
+  fingerprint binds the normalized description text (never line numbers),
+  so rewording the description re-keys the finding honestly.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/vague-workflow-booster
+  negative:
+    - corpus/fixtures/benign/workflow-notes-helper

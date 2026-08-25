@@ -1,0 +1,38 @@
+# E3 — H5 control-plane tampering: config.yaml writes (the per-platform
+# disabled view incl. disabling Skill Lens itself lives there). Base MEDIUM
+# with engine-side content-shape escalation: a `platform_disabled` token in
+# the same payload has no benign authoring story and escalates toward
+# CRITICAL per §17 detection shapes.
+id: LNS-SHL-006
+title: "Writes into agent configuration or platform state"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: integrity.override:control_plane
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.75
+static_only: false
+tags:
+  - control-plane
+  - config-write
+  - hermes-state
+remediation: >-
+  Never mutate Hermes configuration from within a skill; request settings
+  changes through the user instead.
+rationale: >-
+  config.yaml gates permissions, platforms, and plugin enable lists — the
+  exact knobs an implanted skill needs to make itself invisible and its own
+  behavior unreviewed.
+detection: >-
+  Fire per sink site writing agent_home:config.yaml (>, tee, cp/mv dest,
+  heredoc, sed -i, yq write) or gateway state files (channel_directory.json,
+  pairing/**). Escalate severity toward CRITICAL when the written payload
+  contains `platform_disabled` or disables a security tool by name. Reads of
+  config.yaml never fire.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/control-plane-tamper
+  negative:
+    - corpus/fixtures/benign/config-read-only-reporter

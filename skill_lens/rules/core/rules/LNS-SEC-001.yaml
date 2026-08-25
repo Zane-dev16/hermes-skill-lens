@@ -1,0 +1,36 @@
+# E7 — R9: committed known-format credentials. Format-complete matches are
+# near-zero-FP facts; static_only=false because the value is immediately
+# usable AS-IS by any reader (DECISIONS D-014) — demonstrated exposure, not
+# fuzzy prose.
+id: LNS-SEC-001
+title: "Known-format credential committed in bundle"
+rule_version: "1"
+status: active
+engine: secretscan
+capability: credentials.read
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.90
+static_only: false
+tags:
+  - committed-secret
+  - credentials
+remediation: >-
+  Revoke and rotate the exposed credential immediately, then remove it from
+  the bundle; load secrets at run time from the environment instead.
+rationale: >-
+  Anything distributed as a skill is public; a live AWS/GCP/OpenAI/Slack key
+  or PEM block shipped in it hands the account to every downloader, whatever
+  the author intended.
+detection: >-
+  Known key formats over all files incl. decoded views: AWS AKIA/ASIA ids
+  paired with their secret form, GCP service-account JSON private_key_id/
+  BEGIN PRIVATE KEY pairs, OpenAI sk- tokens, Slack xox[baprs]- tokens, and
+  PEM PRIVATE KEY blocks. Reports LOCATION ONLY; values are redacted to
+  prefix+length in any render (secrets never rendered unredacted).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/committed-keys
+  negative:
+    - corpus/fixtures/benign/env-var-documentation

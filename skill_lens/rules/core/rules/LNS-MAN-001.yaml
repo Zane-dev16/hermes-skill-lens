@@ -1,0 +1,38 @@
+# E1 — R5 HiddenLayer-precedent: permission-bypass / hidden-invocation
+# frontmatter. Structural manifest fact (§7 evidence band 0.90-1.00) whose
+# harm is contextual -> capped at MEDIUM per §17 H4 posture; still feeds the
+# integrity ceiling (§8.2).
+id: LNS-MAN-001
+title: "Frontmatter field overrides invocation permissions or hides the skill"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override
+severity: MEDIUM
+weight: 7
+evidence_kind: manifest
+confidence_default: 0.95
+static_only: false
+tags:
+  - permission-bypass
+  - hidden-invocation
+  - frontmatter
+remediation: >-
+  Remove permission-bypass or hide-from-user frontmatter fields, or document
+  in `compatibility` why the skill must control its own invocation surface.
+rationale: >-
+  Frontmatter is attacker-writable and host-consumed (SPEC §17); fields that
+  disable model invocation or hide the skill from view let a bundle alter its
+  own trust and visibility without any code executing.
+detection: >-
+  Fire once per SKILL.md when frontmatter (top level or vendor metadata)
+  declares any of: `disable-model-invocation: true`, `user-invocable: false`,
+  `context: fork` (auto-trigger), or a key matching
+  (?i)(bypass|skip|disable)[-_]?(permission|approval|confirm) with a truthy
+  value. Evidence location is the field line. One finding per field, deduped
+  by fingerprint.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/stealth-invocation
+  negative:
+    - corpus/fixtures/benign/plain-visible-skill

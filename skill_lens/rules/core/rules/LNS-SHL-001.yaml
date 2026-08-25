@@ -1,0 +1,36 @@
+# E3 — R4 clawdhub-precedent: remote fetch piped straight into a shell.
+# The matched site IS the executable sink -> dynamic, regex-kind token scan
+# (line-scanner grade until AST lands; never silently upgraded).
+id: LNS-SHL-001
+title: "Remote script fetched and piped directly into a shell interpreter"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: execute.shell
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.85
+static_only: false
+tags:
+  - dropper
+  - remote-execution
+remediation: >-
+  Download to a file, verify a pinned checksum, then execute the local copy;
+  or declare execute.shell in compatibility if pipe-execution is the skill's
+  documented purpose.
+rationale: >-
+  `curl | sh` executes whatever the remote endpoint serves at run time — the
+  load-bearing primitive of every RCE dropper campaign seen in the wild.
+detection: >-
+  Token-level scan over fenced bash/sh blocks and scripts/*.sh (plus decoded
+  views): fire on <fetch> (curl|wget|curl.exe) whose pipeline feeds sh, bash,
+  zsh, dash, or `sudo <shell>` directly, e.g. `curl -fsSL URL | bash`,
+  `wget -qO- URL | sh`. Whitespace/comment obfuscation between pipe and
+  interpreter still fires. A download WITHOUT an inline interpreter does not
+  fire (see benign lookalike).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/reverse-dropper
+  negative:
+    - corpus/fixtures/benign/pinned-tarball-installer

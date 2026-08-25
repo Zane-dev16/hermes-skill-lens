@@ -1,0 +1,37 @@
+# Hermes Skill Lens — embedded CORE rule pack v0.1 (SPEC §15).
+#
+# Ships in-repo, travels version-pinned with the plugin via git tags
+# (D-RULEOWN). Loads offline from package data; zero network. Semver is
+# YYYY.MM.N: new rule = patch bump, weight/severity change = minor bump +
+# changelog rationale, IR/schema break = major bump.
+#
+# RESERVED IDS (not yet shipped — see DECISIONS D-014):
+#   LNS-MAN-006 tag-spoof heuristic — deferred (highest-FP-risk E1 heuristic;
+#               needs corpus breadth before shipping).
+#   LNS-MAN-008 fallback-grooming heuristic — deferred with MAN-006.
+#   LNS-SHL-007 env-file read family (${HERMES_HOME:-~/.hermes}/.env idiom) —
+#               deferred to the source→sink taint phase so credentials.read
+#               evidence can be correlated, not merely present.
+name: core
+version: "2026.08.2"
+spec_version: rule-pack/1
+description: >-
+  Core detection pack v0.1 for Hermes Skill Lens: seventeen rules across the
+  four Phase-1 engines (E1 manifest, E3 shellscan, E6 netgraph, E7
+  secretscan) plus the claims-stage vague-description rule, selected from
+  the SPEC §17 Hermes-precedent threat matrix. Every rule ships with >=1
+  true-positive golden fixture and >=1 benign lookalike negative fixture
+  under corpus/fixtures/.
+rules_dir: rules
+changelog:
+  - version: "2026.08.2"
+    date: "2026-08-25"
+    notes:
+      - "Add LNS-MAN-004 vague-description rule (SPEC §9.2; D-020)."
+      - "Fixtures: vague-workflow-booster + workflow-notes-helper."
+  - version: "2026.08.1"
+    date: "2026-08-25"
+    notes:
+      - "Initial core pack v0.1: 16 active rules across E1/E3/E6/E7."
+      - "LNS-NET-011 title/capability anchored to SPEC §7 worked finding."
+      - "Severity calibration per SPEC §17 detection-shape notes (H1-H9)."

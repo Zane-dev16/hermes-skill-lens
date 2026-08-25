@@ -1,0 +1,35 @@
+# E3 — R11 sabotage/destruction: recursive deletes aimed outside the skill
+# root. Intent ambiguity acknowledged by §17 -> MEDIUM with declared-discount
+# eligibility; path labels come from ingest normalization (H9 primitive).
+id: LNS-SHL-003
+title: "Recursive delete targets paths outside the skill root"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: filesystem.outside
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.75
+static_only: false
+tags:
+  - destruction
+  - filesystem-outside
+remediation: >-
+  Constrain cleanup to the skill's own directory, or document the external
+  cleanup target in description/compatibility so the discount can apply.
+rationale: >-
+  rm -rf beyond the bundle destroys user data with no recovery path; most
+  hits are careless cleanup scripts rather than malice, which is why this is
+  MEDIUM and discountable, not CRITICAL.
+detection: >-
+  Fire on rm/unlink variants carrying -r with -f/--force (any order) whose
+  target resolves via ingest path labels to anything other than
+  inside_skill_root: absolute paths, ~/$HOME/*, $HERMES_HOME subtrees, globs
+  like /* . Targets inside_skill_root never fire. Unknown-variable forms
+  degrade per §4 conservative treatment note (reduced confidence 0.65-0.75).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/destructive-rm
+  negative:
+    - corpus/fixtures/benign/self-cleanup-script

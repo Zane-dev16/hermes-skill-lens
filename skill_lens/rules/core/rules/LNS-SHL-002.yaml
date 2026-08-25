@@ -1,0 +1,34 @@
+# E3 — R4/R7: eval / base64-decode-to-exec chains. Obfuscation-as-ladder;
+# capability is execute.code with an obfuscation tag (§9.1).
+id: LNS-SHL-002
+title: "Obfuscated execution chain decodes a payload into eval"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: execute.code
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.80
+static_only: false
+tags:
+  - obfuscation
+  - dynamic-execution
+remediation: >-
+  Ship readable scripts; if encoding is required for transport, decode to
+  disk, show the decoded content in review, and declare execute.code.
+rationale: >-
+  eval/`base64 -d | sh` chains hide the executed payload from human review;
+  legitimate skills rarely need them, and decoded content still gets scanned
+  as data (T5) so this rule costs little when it fires.
+detection: >-
+  Fire per site matching any of: `eval` applied to a command substitution
+  containing base64/hex/printf-encoded data; `base64 -d|-D|--decode` piped
+  into a shell interpreter; `printf <hex>` piped to a shell; python/perl -c
+  wrappers decoding then exec'ing. Fingerprint normalizes whitespace only,
+  so re-indented payloads dedupe while changed payloads re-fire.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/reverse-dropper
+  negative:
+    - corpus/fixtures/benign/pinned-tarball-installer

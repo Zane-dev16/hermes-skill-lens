@@ -1,0 +1,36 @@
+# E7 — R9 residual: high-entropy secret-shaped blobs with NO known prefix.
+# The classic FP generator — kept MEDIUM/static with a conservative window
+# tuned against this pack's benign fixtures (hex/uuid/b64-of-prose all sit
+# below threshold; measured 3.0-4.6 bits/char vs >=4.8 required).
+id: LNS-SEC-002
+title: "High-entropy string looks like a bare secret token"
+rule_version: "1"
+status: active
+engine: secretscan
+capability: credentials.read
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.65
+static_only: true
+tags:
+  - entropy
+  - suspected-secret
+remediation: >-
+  Move generated tokens out of the bundle; if the flagged string is not a
+  secret, rename or shorten it so scans stay clean.
+rationale: >-
+  Custom API tokens rarely match published formats but still leak accounts
+  when committed; entropy windows catch them at the cost of some noise, so
+  they report as suspected rather than confirmed.
+detection: >-
+  Window scan (>=24 chars, Shannon entropy >=4.8 bits/char) restricted to
+  assignment/export/config contexts (NAME=<token>, "token": "<token>") plus
+  common bearer/pat prefixes. Skip strings inside obvious test/example
+  markers (EXAMPLE, placeholder, xxxxxx). Values are redacted in renders;
+  only window position and length are cited.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/bare-token-blob
+  negative:
+    - corpus/fixtures/benign/hex-docs-and-uuids

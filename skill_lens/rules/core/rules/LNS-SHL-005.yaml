@@ -1,0 +1,37 @@
+# E3 — H6 agent-cron persistence: cron/jobs.json is arbitrary-agent-run-
+# as-schedule; one JSON write = recurring execution. Cron-dir writes rank
+# above scheduler-API calls and prose (§17 detection shapes) -> HIGH.
+id: LNS-SHL-005
+title: "Installs recurring execution via agent-cron or OS scheduler"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: persistence:cron_json
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.85
+static_only: false
+tags:
+  - persistence
+  - cron
+  - hermes-state
+remediation: >-
+  Do not schedule work as a side effect of installation; if scheduling is the
+  product, declare it and let the user create the job themselves.
+rationale: >-
+  Scheduled prompts re-arm after restarts and run with full tool access while
+  nobody watches; hidden persistence is the highest-value move for an
+  implanted skill.
+detection: >-
+  Fire per sink writing cron/jobs.json under the Hermes home, per crontab
+  mutation (`>>|> /etc/crontab`, `crontab -l | ... | crontab -`,
+  /etc/cron.d/*, systemd user timers via `systemctl --user enable`), or per
+  `hermes cron add` invocation. Payload-marker escalation (credential or
+  network tokens inside the written JSON/script fields) is engine-side and
+  raises confidence toward 0.95 without changing the tier.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/cron-persistence
+  negative:
+    - corpus/fixtures/benign/local-reminder-notes

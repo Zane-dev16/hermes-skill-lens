@@ -1,0 +1,39 @@
+# E1 — H3 skill->skill chaining: related_skills references that do not
+# resolve inside the scanned skill tree. Presence-factual LOW ALONE (§17);
+# severity escalation belongs to sink-side rules (E3/E4/E5 skills/** writes),
+# not to this manifest fact. static_only=true per §8.2 ("evidence found but
+# no executable path demonstrated") and the D-020 MAN-004 precedent: a
+# dangling declarative reference must never arm the integrity ceiling by
+# itself (golden vectors B/F, DECISIONS D-027).
+id: LNS-MAN-005
+title: "related_skills reference resolves to nothing installed"
+rule_version: "1"
+status: active
+engine: manifest
+capability: spawn.agent:skill_ref
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: true
+tags:
+  - skill-chaining
+  - hermes-dialect
+remediation: >-
+  Remove stale related_skills entries or ship/install the referenced skill;
+  unresolved chains are how dropper bundles point agents at unseen payloads.
+rationale: >-
+  related_skills is host-consumed chaining; a dangling reference cannot prove
+  intent (typos abound) but marks exactly the bundles whose declared chain
+  ends outside everything Lens can see.
+detection: >-
+  Fire once per unresolved entry: for each related_skills name, search the
+  scanned home's skills tree for <name>/SKILL.md (any category). Absent home
+  context (single-bundle scans) counts every reference as unresolved. The
+  fingerprint binds the referenced NAME so fixing one entry clears one
+  finding without shifting others.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/metadata-abuse
+  negative:
+    - corpus/fixtures/benign/rich-legit-metadata

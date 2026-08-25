@@ -1,0 +1,36 @@
+# E6 — money emitter (§4 normative): payment-rail / blockchain-RPC /
+# wallet-drainer host classes fire capability=money so the undeclared-money
+# ceiling (§8.2, worked example G: 70/C/warn) is exercisable from day one.
+id: LNS-NET-013
+title: "Contacts a payment-rail or blockchain endpoint"
+rule_version: "1"
+status: active
+engine: netgraph
+capability: money
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.80
+static_only: false
+tags:
+  - money-touch
+  - undeclared-host
+remediation: >-
+  Remove payment/crypto calls, or declare money capabilities plainly in
+  description/compatibility so users can price the risk.
+rationale: >-
+  Wallet enumeration and rail calls move real value; undeclared, they are the
+  single most monetizable abuse of agent trust (worked example G anchors this
+  tier).
+detection: >-
+  Fire per endpoint literal whose host matches a bundled class list:
+  payment rails (api.stripe.com, api.paypal.com, api.razorpay.com and
+  kin), blockchain RPC/indexers (infura.io, alchemy.com, trongrid.io,
+  blockchain.info, blockstream.info and kin), and known wallet-drainer
+  domains (curated list, version-controlled with the pack). Class membership
+  is data in the engine, extendable without touching this rule file.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/wallet-enumerator
+  negative:
+    - corpus/fixtures/benign/invoice-ledger-writer

@@ -1,0 +1,37 @@
+# E6 — R3 AMOS-precedent exfil correlation. ID/title/capability anchored to
+# the SPEC §7 worked finding verbatim. Correlated credential->send is the
+# confirmed-CRITICAL path of worked example C (score 25/F/alert).
+id: LNS-NET-011
+title: "Posts locally collected data to external host"
+rule_version: "1"
+status: active
+engine: netgraph
+capability: network.send
+severity: CRITICAL
+weight: 40
+evidence_kind: crossref
+confidence_default: 0.88
+static_only: false
+tags:
+  - exfil-shaped
+  - undeclared-host
+remediation: >-
+  Remove the upload or scope it to user-initiated actions against hosts
+  declared in description/compatibility.
+rationale: >-
+  Send sinks correlated with credential sources (env files, keychains, token
+  stores — $HERMES_HOME/.env included) are the canonical silent-exfiltration
+  shape; no benign skill posts credentials anywhere.
+detection: >-
+  Fire when a send sink (POST/PUT upload, --data-binary/-d/--upload-file,
+  requests.post body, fetch body) targets a host classified as paste site,
+  webhook sink, dead-drop resolver, tunnel endpoint, raw IP, or .onion AND
+  the same file reads a credential source (env vars, .env paths, key/token
+  variables) — the v0.9 same-file reachability bar. The fingerprint binds
+  (host-class, source-kind), not line numbers, so moved payloads keep their
+  identity while baselines stay valid.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/exfil-env-paste
+  negative:
+    - corpus/fixtures/benign/declared-notes-upload

@@ -1,0 +1,37 @@
+# E6 — R3/R12: dead-drop/tunnel/anonymizing endpoint presence WITHOUT the
+# credential correlation needed for NET-011. Presence-only -> MEDIUM static;
+# engines may re-grade to crossref when a same-file send sink appears (which
+# then usually satisfies NET-011 anyway).
+id: LNS-NET-012
+title: "Dead-drop, tunnel, or anonymizing endpoint literal"
+rule_version: "1"
+status: active
+engine: netgraph
+capability: network.send
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.70
+static_only: true
+tags:
+  - dead-drop
+  - tunnel
+  - undeclared-host
+remediation: >-
+  Replace covert transport with ordinary declared endpoints; if tunnelling is
+  the skill's purpose, document it in compatibility.
+rationale: >-
+  ntfy.sh topics, ngrok-style tunnels, and .onion literals are the standard
+  covert-channel inventory; their mere presence in a productivity bundle is a
+  strong smell even before any payload is correlated.
+detection: >-
+  Host-literal classification over URL/host/IP text (incl. decoded views):
+  dead-drop resolvers (ntfy.sh and kin), tunnel providers (ngrok,
+  cloudflared trycloudflare, localtunnel, bore.pub), .onion names, and bare
+  raw-IP http(s) endpoints (RFC1918 + public). Documentation EXAMPLES inside
+  fenced blocks still fire — location distinguishes them, reviewers decide.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/tunnel-beacon
+  negative:
+    - corpus/fixtures/benign/webhook-notifier

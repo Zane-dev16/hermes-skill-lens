@@ -1,0 +1,33 @@
+# E1 — H4: declared category contradicting the categorized install layout.
+# Deceptive-placement signal; presence-factual LOW.
+id: LNS-MAN-003
+title: "Declared category does not match the install directory"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override:deceptive_metadata
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.92
+static_only: false
+tags:
+  - deceptive-metadata
+  - categorized-layout
+remediation: >-
+  Align metadata.hermes.category with the directory the bundle is installed
+  under (<skills>/<category>/<name>/), or omit the field.
+rationale: >-
+  A bundle claiming a different category than its install location distorts
+  hub browsing and policy grouping; harmless typos are far more common than
+  deception, hence LOW.
+detection: >-
+  Fire when IR carries both a non-null metadata.hermes.category and a
+  categorized-layout identity.category, and the two differ case-insensitively
+  after trim. Never fires for flat/single-file layouts where no authoritative
+  directory category exists.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/metadata-abuse
+  negative:
+    - corpus/fixtures/benign/rich-legit-metadata
