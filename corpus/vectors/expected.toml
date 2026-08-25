@@ -1,0 +1,97 @@
+# Golden vectors A-G — SPEC §8.3 worked examples, THE Phase-1 exit oracle.
+#
+# Each entry pins the EXACT outcome the live pipeline
+# (ingest -> claims -> engines -> dedup -> scoring) must produce for the
+# sibling bundle directory. No tolerance: scores are byte-exact integers.
+#
+# Keys per DECISIONS D-028:
+#   scenario     - the §8.3 row label
+#   profile      - policy profile label passed to build_report (annotation)
+#   score        - exact integer score after ceilings
+#   grade        - exact grade band (ceilings clamp score AND grade)
+#   verdict      - alert | warn | notice | clean
+#   needs_review - orthogonal boolean flag (never a fifth verdict)
+#   rules        - EXACT sorted set of fired rule ids (no more, no fewer)
+#   ceilings     - exact sorted list of applied ceiling names
+
+spec = "golden-vectors/1"
+
+[vectors.A]
+scenario = "Clean helper"
+profile = "street"
+score = 100
+grade = "A"
+verdict = "clean"
+needs_review = false
+rules = []
+ceilings = []
+
+[vectors.B]
+scenario = "Mild overreach - formats markdown, actually reaches outside its root"
+profile = "street"
+score = 91
+grade = "A"
+verdict = "notice"
+needs_review = false
+rules = ["LNS-MAN-005", "LNS-SHL-003"]
+ceilings = []
+
+[vectors.C]
+scenario = "Sneaky exfil - posts env to paste site via base64 chain"
+profile = "street"
+score = 25
+grade = "F"
+verdict = "alert"
+needs_review = false
+rules = ["LNS-NET-011", "LNS-NET-012", "LNS-SHL-002"]
+ceilings = ["confirmed-critical"]
+
+[vectors.C-prime]
+scenario = "Suspected exfil - same shape, unclassed endpoint (conf 0.55)"
+profile = "street"
+score = 40
+grade = "D"
+verdict = "warn"
+needs_review = true
+rules = ["LNS-NET-011", "LNS-SHL-002"]
+ceilings = ["suspected-critical"]
+
+[vectors.D]
+scenario = "Declared pentest lab (street profile would be harsh; shown under lab)"
+profile = "lab"
+score = 85
+grade = "B"
+verdict = "notice"
+needs_review = false
+rules = ["LNS-SHL-001", "LNS-SHL-003"]
+ceilings = []
+
+[vectors.E]
+scenario = "Rogue override - writes agent settings to pre-approve tools"
+profile = "street"
+score = 80
+grade = "C"
+verdict = "warn"
+needs_review = false
+rules = ["LNS-MAN-004", "LNS-MAN-005", "LNS-SHL-006"]
+ceilings = ["integrity-attempt"]
+
+[vectors.F]
+scenario = "Noisy formatter (FP-prone) - LOW tier saturates at its cap"
+profile = "street"
+score = 83
+grade = "B"
+verdict = "notice"
+needs_review = false
+rules = ["LNS-MAN-004", "LNS-MAN-005", "LNS-SHL-003"]
+ceilings = []
+
+[vectors.G]
+scenario = "Undeclared wallet enumerator"
+profile = "street"
+score = 70
+grade = "C"
+verdict = "warn"
+needs_review = false
+rules = ["LNS-NET-013"]
+ceilings = ["undeclared-money"]
