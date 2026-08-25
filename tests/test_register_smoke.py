@@ -13,6 +13,7 @@ Loads the repo-root plugin package exactly the way the host does
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 import types
 from pathlib import Path
@@ -59,11 +60,22 @@ def test_register_does_not_raise(fake_ctx: Any, plugin_module: PluginModule) -> 
     assert view.plugin_id() == "lens"
 
 
-def test_register_survives_malformed_context(plugin_module: PluginModule) -> None:
-    """register(broken ctx) must swallow everything (advisor law)."""
+def test_register_survives_malformed_context(
+    plugin_module: PluginModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    """register(hostile ctx) must swallow everything AND log it (advisor law).
+
+    A silently-no-op register would be indistinguishable from a crash-free
+    success; we pin that the hostile seam failure surfaces in the ``lens``
+    log, no ``pre_tool_call`` registration is ever ATTEMPTED, and the
+    defensive view is still installed (present-but-inert plugin).
+    """
     module = plugin_module
 
     class Boom:
+        def __init__(self) -> None:
+            self.hook_attempts: list[str] = []
+
         @property
         def state(self) -> Any:
             raise RuntimeError("host context is hostile")
@@ -72,9 +84,27 @@ def test_register_survives_malformed_context(plugin_module: PluginModule) -> Non
             raise RuntimeError("no")
 
         def register_hook(self, hook_name: str, callback: Any) -> Any:
+            self.hook_attempts.append(hook_name)
             raise RuntimeError("no registrations today")
 
-    module.register(Boom())  # no exception may escape
+        def register_command(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("no registrations today")
+
+    boom = Boom()
+    with caplog.at_level(logging.WARNING, logger="lens"):
+        module.register(boom)  # no exception may escape...
+
+    # ...and the swallowed failure is logged, never silently ignored.
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("register_command" in message and "failed" in message for message in messages), (
+        f"hostile-seam failure not logged; got: {messages}"
+    )
+
+    # Advisor law holds even against a hostile host: zero blocking-hook
+    # attempts, and the defensive view is still installed for later phases.
+    assert "pre_tool_call" not in boom.hook_attempts
+    view = module.skill_lens.bootstrap.get_context()
+    assert view is not None  # present-but-inert, not vanished
 
 
 def test_zero_pre_tool_call_registrations(fake_ctx: Any, plugin_module: PluginModule) -> None:

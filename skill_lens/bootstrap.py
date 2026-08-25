@@ -1,9 +1,10 @@
 """Plugin bootstrap: turn a raw host context into Skill Lens runtime state.
 
-Phase 0 spine only: store a defensive :class:`PluginContextView` and log one
-line. Hook/command registrations arrive in later phases; this module already
-enforces the advisor contract (nothing here may raise into the host beyond
-what ``register`` in the root ``__init__.py`` already contains).
+Stores a defensive :class:`PluginContextView` and registers the ``/lens``
+slash command (scan|report|help — SPEC §11.2). Observer HOOKS stay
+unregistered until Phase 4; what registers today is command-only, and
+never a blocking hook. Any failure is logged, never raised into the host:
+the advisor contract holds no matter how malformed the context is.
 """
 
 from __future__ import annotations
@@ -34,10 +35,11 @@ def reset_context() -> None:
 
 
 def register_plugin(raw_ctx: Any) -> PluginContextView:
-    """Store *raw_ctx* behind a defensive view; return the view.
+    """Store *raw_ctx* behind a defensive view; register ``/lens``; return it.
 
-    Registers zero hooks and zero commands in Phase 0 — observers are wired
-    in a later phase, and never a blocking hook.
+    Command registrations only in this phase — observer hooks are wired in
+    Phase 4, and never a blocking hook. Slash-registration failure logs and
+    degrades to an inert plugin instead of raising into the host.
     """
     global _active_view
     from . import __version__
@@ -45,8 +47,19 @@ def register_plugin(raw_ctx: Any) -> PluginContextView:
     view = PluginContextView(raw_ctx)
     with _lock:
         _active_view = view
+    _register_slash_safely(view)
     logger.info(
         "Skill Lens %s registered (advisor mode; zero blocking hooks)",
         __version__,
     )
     return view
+
+
+def _register_slash_safely(view: PluginContextView) -> None:
+    """Register /lens; any failure stays inside this function (advisor law)."""
+    try:
+        from .slash import register_slash
+
+        register_slash(view)
+    except Exception:
+        logger.exception("Skill Lens: /lens registration failed; slash surface inert")
