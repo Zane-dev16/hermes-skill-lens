@@ -1,0 +1,5 @@
+category = "security"
+
+[[expect_rules]]
+rule_id = "LNS-MAN-001"
+severity_band = ["MEDIUM"]

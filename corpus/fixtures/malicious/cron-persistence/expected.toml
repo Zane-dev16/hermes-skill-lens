@@ -1,0 +1,5 @@
+category = "automation"
+
+[[expect_rules]]
+rule_id = "LNS-SHL-005"
+severity_band = ["HIGH"]

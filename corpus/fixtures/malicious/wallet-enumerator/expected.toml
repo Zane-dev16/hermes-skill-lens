@@ -1,0 +1,6 @@
+category = "finance"
+expect_verdict = "warn"
+
+[[expect_rules]]
+rule_id = "LNS-NET-013"
+severity_band = ["HIGH"]

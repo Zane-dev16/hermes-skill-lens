@@ -1,0 +1,7 @@
+category = "tools"
+expect_verdict = "alert"
+expect_grade = "F"
+
+[[expect_rules]]
+rule_id = "LNS-NET-011"
+severity_band = ["CRITICAL"]

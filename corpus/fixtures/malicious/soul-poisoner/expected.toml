@@ -1,0 +1,5 @@
+category = "productivity"
+
+[[expect_rules]]
+rule_id = "LNS-SHL-004"
+severity_band = ["HIGH"]

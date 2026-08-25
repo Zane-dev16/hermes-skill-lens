@@ -1,0 +1,17 @@
+category = "tools"
+
+[[expect_rules]]
+rule_id = "LNS-MAN-002"
+severity_band = ["LOW"]
+
+[[expect_rules]]
+rule_id = "LNS-MAN-003"
+severity_band = ["LOW"]
+
+[[expect_rules]]
+rule_id = "LNS-MAN-005"
+severity_band = ["LOW"]
+
+[[expect_rules]]
+rule_id = "LNS-MAN-007"
+severity_band = ["MEDIUM"]

@@ -1,0 +1,5 @@
+category = "automation"
+
+[[expect_rules]]
+rule_id = "LNS-NET-012"
+severity_band = ["MEDIUM"]
