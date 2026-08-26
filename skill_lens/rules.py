@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,6 +115,9 @@ CAPABILITY_FAMILIES: frozenset[str] = frozenset(
         "integrity.override",
         "persona.write",
         "spawn.agent",
+        # E8 depintel primary emitter (SPEC §4 row E8 / §17 R8 supply-chain
+        # threats). Ontology growth, not mutation: no existing rule changes.
+        "supply-chain",
     }
 )
 
@@ -283,6 +287,47 @@ def load_core_pack(
     return load_pack(core_pack_path(), diagnostics=diagnostics)
 
 
+#: PERF (Phase 3 budgets): parse-cache for the diagnostics-free hot path.
+#: ``scan_bundle`` reloads the embedded core pack on EVERY scan; 40+ YAML
+#: documents cost ~200 ms each pass, which alone blows the 400 ms cold-scan
+#: budget. The cache key is (resolved dir, sorted (relpath, mtime_ns, size)
+#: snapshot of every *.yaml under it) — any on-disk change misses the key and
+#: forces a full reload, so live pack editing keeps working. Only calls that
+#: pass NO diagnostics collector may hit the cache: diagnostic replay is a
+#: caller-visible behavior, and caching would swallow repeat warnings.
+#: RulePack/Rule are frozen dataclasses and engines only read them, so the
+#: shared instance is safe.
+
+_PACK_CACHE_LOCK = threading.Lock()
+_PACK_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], RulePack] = {}
+
+
+def _pack_snapshot(root: Path) -> tuple[tuple[str, int, int], ...]:
+    """Sorted mtime/size fingerprint of every YAML file under *root*.
+
+    ``()`` (empty tuple) signals 'cannot snapshot safely' (unreadable tree) —
+    the caller then skips the cache entirely. Sorted so traversal order can
+    never leak into the key.
+    """
+    try:
+        return tuple(
+            (p.relative_to(root).as_posix(), p.stat().st_mtime_ns, p.stat().st_size)
+            for p in sorted(root.rglob("*.yaml"))
+        )
+    except OSError:
+        return ()  # empty tuple is still a valid (stable) key shape
+
+
+def _pack_cache_get(key: tuple[str, tuple[tuple[str, int, int], ...]]) -> RulePack | None:
+    with _PACK_CACHE_LOCK:
+        return _PACK_CACHE.get(key)
+
+
+def _pack_cache_put(key: tuple[str, tuple[tuple[str, int, int], ...]], pack: RulePack) -> None:
+    with _PACK_CACHE_LOCK:
+        _PACK_CACHE[key] = pack
+
+
 def load_pack(
     path: Path | str,
     *,
@@ -299,6 +344,22 @@ def load_pack(
     root = Path(path)
     if not root.is_dir():
         raise RulePackError(f"rule pack directory not found: {root}")
+
+    # PERF cache lane (see _PACK_CACHE above): only the diagnostics-free
+    # path may serve a cached pack — with a supplied collector the full load
+    # runs so unknown-field warnings replay exactly as before.
+    cache_key: tuple[str, tuple[tuple[str, int, int], ...]] | None = None
+    if diagnostics is None:
+        try:
+            resolved = str(root.resolve())
+        except OSError:
+            resolved = str(root)
+        snapshot = _pack_snapshot(root)
+        if snapshot != ():
+            cache_key = (resolved, snapshot)
+            cached = _pack_cache_get(cache_key)
+            if cached is not None:
+                return cached
 
     pack_yaml_path = root / "pack.yaml"
     try:
@@ -378,7 +439,7 @@ def load_pack(
         seen_ids[rule.id] = rel_name
         rules.append(rule)
 
-    return RulePack(
+    pack = RulePack(
         name=name,
         version=version_raw,
         spec_version=spec_version,
@@ -388,6 +449,9 @@ def load_pack(
         source_label=str(root),
         _file_inputs=tuple(file_inputs),
     )
+    if cache_key is not None:
+        _pack_cache_put(cache_key, pack)
+    return pack
 
 
 _PACK_KNOWN_FIELDS = frozenset(
