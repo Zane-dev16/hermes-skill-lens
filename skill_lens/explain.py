@@ -25,13 +25,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from skill_lens.render import (
+from .render import (
     ADVISOR_LINE,
     CHAT_HARD_BUDGET,
     CHAT_SOFT_BUDGET,
     COVERAGE_FOOTER,
 )
-from skill_lens.rules import RulePack
+from .rules import RulePack
 
 _FENCE = "```"
 
@@ -59,7 +59,7 @@ def find_rule(pack: RulePack, rule_id: str) -> tuple[Any, ...]:
 
 def _weight_line(severity: str) -> str:
     """The pinned pricing math for a tier, from scoring constants (T3)."""
-    from skill_lens.scoring import TIER_CAPS, TIER_FIRST_WEIGHT, TIER_SUBSEQUENT_WEIGHT
+    from .scoring import TIER_CAPS, TIER_FIRST_WEIGHT, TIER_SUBSEQUENT_WEIGHT
 
     first = TIER_FIRST_WEIGHT.get(severity, 0)
     subsequent = TIER_SUBSEQUENT_WEIGHT.get(severity, 0)

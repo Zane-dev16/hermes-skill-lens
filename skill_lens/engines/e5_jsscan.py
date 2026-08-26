@@ -66,16 +66,18 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from skill_lens.claims import finding_fingerprint, is_declared
-from skill_lens.engines.base import (
+from ..claims import finding_fingerprint, is_declared
+from ..ir import SkillIR
+from ..parsing import GATEWAY, ParserGateway, line_tokens
+from .base import (
     Finding,
     Location,
     ScanContext,
     claimed_capability_paths,
     iter_text_files,
 )
-from skill_lens.engines.e3_shellscan import _PLATFORM_DISABLED_RE
-from skill_lens.engines.e4_pyscan import (
+from .e3_shellscan import _PLATFORM_DISABLED_RE
+from .e4_pyscan import (
     DEGRADED_CONFIDENCE_CAP,
     DEGRADED_FLOW_WINDOW,
     _is_interpreter_token,
@@ -83,13 +85,11 @@ from skill_lens.engines.e4_pyscan import (
     _route_delete_targets,
     _state_message,
 )
-from skill_lens.ir import SkillIR
-from skill_lens.parsing import GATEWAY, ParserGateway, line_tokens
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from skill_lens.rules import Rule
+    from ..rules import Rule
 
 #: Engine catalog binding (SPEC §4). REGISTRY keys must equal this.
 ENGINE_NAME = "jsscan"
@@ -1454,7 +1454,7 @@ class JsScanEngine:
 
 def _current_ctx() -> ScanContext:
     """Ambient scan context (engines/__init__ installs it around dispatch)."""
-    from skill_lens.engines.base import current_context
+    from .base import current_context
 
     return current_context()
 

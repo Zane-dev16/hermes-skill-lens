@@ -36,18 +36,18 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from skill_lens.claims import finding_fingerprint
-from skill_lens.engines.base import (
+from ..claims import finding_fingerprint
+from ..ir import SkillIR
+from .base import (
     Finding,
     Location,
     ScanContext,
     finding_sort_key,
     iter_text_files,
 )
-from skill_lens.ir import SkillIR
 
 if TYPE_CHECKING:
-    from skill_lens.rules import Rule
+    from ..rules import Rule
 
 #: Engine catalog binding (SPEC §4). REGISTRY keys must equal this.
 ENGINE_NAME = "secretscan"

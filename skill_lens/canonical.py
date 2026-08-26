@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from skill_lens.ir import SkillIR
+from .ir import SkillIR
 
 ENVELOPE_FILENAME = "report.json"
 SIDECAR_FILENAME = "report.meta.json"

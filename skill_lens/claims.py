@@ -47,7 +47,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from skill_lens.ir import (
+from .ir import (
     CLAIM_KIND_ALLOWED_TOOLS,
     CLAIM_KIND_COMPATIBILITY,
     CLAIM_KIND_DESCRIPTION_PHRASE,
@@ -59,7 +59,7 @@ from skill_lens.ir import (
     ResolvedFrontmatter,
     SkillIR,
 )
-from skill_lens.lexicon import (
+from .lexicon import (
     ANY_ACTION_VERB_STEMS,
     LEXICON_FAMILIES,
     OBJECT_WINDOW_TOKENS,

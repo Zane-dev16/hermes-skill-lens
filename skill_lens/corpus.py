@@ -61,19 +61,19 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
-from skill_lens.diagnostics import (
+from .diagnostics import (
     SEVERITY_INFO,
     DiagnosticsCollector,
 )
-from skill_lens.engines.base import (
+from .engines.base import (
     ScanContext,
     infer_skills_root,
     reset_scan_context,
     set_scan_context,
 )
-from skill_lens.ingest import discover_bundles, load_bundle
-from skill_lens.ir import SkillIR
-from skill_lens.rules import SEVERITY_TIERS, Rule, RulePack, load_core_pack
+from .ingest import discover_bundles, load_bundle
+from .ir import SkillIR
+from .rules import SEVERITY_TIERS, Rule, RulePack, load_core_pack
 
 #: Stable diagnostic codes for the corpus subsystem.
 CODE_CORPUS_MANIFEST = "LNS-CORPUS-MANIFEST"  # expected.toml problems
@@ -299,7 +299,7 @@ def _load_engines_module() -> ModuleType | None:
     seams must never hard-fail analysis or runtime.
     """
     try:
-        return importlib.import_module("skill_lens.engines")
+        return importlib.import_module(f"{__package__ or 'skill_lens'}.engines")
     except ImportError:
         return None
 
@@ -307,7 +307,7 @@ def _load_engines_module() -> ModuleType | None:
 def _load_claims_module() -> ModuleType | None:
     """Probe the claims module (same dynamic-probe discipline as engines)."""
     try:
-        return importlib.import_module("skill_lens.claims")
+        return importlib.import_module(f"{__package__ or 'skill_lens'}.claims")
     except ImportError:  # pragma: no cover - ships with the package
         return None
 

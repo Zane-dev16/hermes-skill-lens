@@ -27,8 +27,9 @@ from collections.abc import Mapping
 from glob import escape as _glob_escape
 from typing import TYPE_CHECKING, Any
 
-from skill_lens.claims import vague_description_finding
-from skill_lens.engines.base import (
+from ..claims import vague_description_finding
+from ..ir import LAYOUT_CATEGORIZED, SkillIR
+from .base import (
     Finding,
     Location,
     ScanContext,
@@ -36,12 +37,11 @@ from skill_lens.engines.base import (
     manifest_rel_path,
     read_skill_md_text,
 )
-from skill_lens.ir import LAYOUT_CATEGORIZED, SkillIR
 
 if TYPE_CHECKING:  # data-only module; runtime code never needs Rule objects
     from collections.abc import Iterable
 
-    from skill_lens.rules import Rule
+    from ..rules import Rule
 
 #: Engine catalog binding (SPEC §4). REGISTRY keys must equal this.
 ENGINE_NAME = "manifest"
@@ -507,7 +507,7 @@ def _skill_reference_resolves(skills_root: Any, name: str) -> bool:
 
 
 def _fp(rule: Rule, normalized_evidence: str) -> str:
-    from skill_lens.claims import finding_fingerprint
+    from ..claims import finding_fingerprint
 
     return finding_fingerprint(rule.id, rule.capability, normalized_evidence)
 

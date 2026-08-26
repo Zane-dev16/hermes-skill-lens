@@ -39,11 +39,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from skill_lens.claims import extract_all_claims
-from skill_lens.diagnostics import (
+from .claims import extract_all_claims
+from .diagnostics import (
     DiagnosticsCollector,
 )
-from skill_lens.ir import (
+from .ir import (
     LAYOUT_CATEGORIZED,
     LAYOUT_FLAT,
     LAYOUT_SINGLE_FILE,
@@ -581,7 +581,7 @@ def _build_hermes_metadata(
     path: str,
 ) -> Any:
     """Type ``metadata.hermes`` against the observed grammar (tolerantly)."""
-    from skill_lens.ir import HermesMetadata  # local: avoids import cycles in tests
+    from .ir import HermesMetadata  # local: avoids import cycles in tests
 
     hm_errors: list[str] = []
 

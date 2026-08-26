@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from skill_lens.canonical import canonical_dumps
-from skill_lens.diagnostics import DiagnosticsCollector
-from skill_lens.ingest import (
+from .canonical import canonical_dumps
+from .diagnostics import DiagnosticsCollector
+from .ingest import (
     DEFAULT_CEILINGS,
     BundleRef,
     Ceilings,
@@ -35,7 +35,7 @@ from skill_lens.ingest import (
     load_bundle,
     read_hub_lock,
 )
-from skill_lens.ir import (
+from .ir import (
     IR_SPEC_VERSION,
     TOOL_NAME,
     SkillIR,

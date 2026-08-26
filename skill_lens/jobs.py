@@ -42,8 +42,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from skill_lens.cache import CacheEntry, hash8
-from skill_lens.canonical import canonical_dumps
+from .cache import CacheEntry, hash8
+from .canonical import canonical_dumps
 
 logger = logging.getLogger("lens")
 
@@ -192,7 +192,7 @@ def pipeline_runner(job: JobRecord) -> None:
     so the edge points one way only at call time. run_scan applies the same
     internal deadline it always has; a breach fails the job honestly.
     """
-    from skill_lens.slash import run_scan, shared_cache
+    from .slash import run_scan, shared_cache
 
     context = job.context
     if context is None:
@@ -409,6 +409,7 @@ class JobManager:
             job.updated = time.time()
             self._persist_locked()
             self._cond.notify_all()  # wake state watchers (scanning)
+        self._ledger.append("scan_started", job)  # §11.5: every transition mirrors
         try:
             self._runner(job)
         except BaseException as exc:  # noqa: BLE001 — every failure is recorded
@@ -618,7 +619,7 @@ class JobManager:
             except Exception:  # noqa: BLE001 — display-only best effort
                 entry = None
         if entry is not None:
-            from skill_lens.render import fast_line_ok
+            from .render import fast_line_ok
 
             return fast_line_ok(
                 name=entry.name,
@@ -680,19 +681,19 @@ class JobManager:
 
 
 def _queued_line(job: JobRecord) -> str:
-    from skill_lens.render import fast_line_scan_queued
+    from .render import fast_line_scan_queued
 
     return fast_line_scan_queued(name=job.name, hash8=hash8(job.bundle_hash))
 
 
 def _skip_line(job: JobRecord) -> str:
-    from skill_lens.render import fast_line_coalesced
+    from .render import fast_line_coalesced
 
     return fast_line_coalesced(name=job.name, hash8=hash8(job.bundle_hash))
 
 
 def _fail_line(job: JobRecord) -> str:
-    from skill_lens.render import fast_line_fail
+    from .render import fast_line_fail
 
     return fast_line_fail(name=job.name, reason=job.error or "scan failed")
 

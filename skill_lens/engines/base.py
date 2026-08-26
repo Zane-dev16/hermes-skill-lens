@@ -37,12 +37,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from skill_lens.claims import finding_fingerprint
-from skill_lens.diagnostics import SEVERITY_INFO, DiagnosticsCollector
-from skill_lens.ir import FileRecord, SkillIR
+from ..claims import finding_fingerprint
+from ..diagnostics import SEVERITY_INFO, DiagnosticsCollector
+from ..ir import FileRecord, SkillIR
 
 if TYPE_CHECKING:  # import cycle safety: rules is data-only but heavy to load
-    from skill_lens.rules import Rule
+    from ..rules import Rule
 
 #: Stable codes/names for the engine sub-system.
 CODE_ENGINE_FAILURE = "LNS-ENG-000"  # synthetic isolation finding (D-CRASH)

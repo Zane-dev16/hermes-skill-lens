@@ -53,27 +53,27 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from skill_lens.claims import finding_fingerprint, is_declared
-from skill_lens.engines.base import (
+from ..claims import finding_fingerprint, is_declared
+from ..ir import SkillIR
+from ..parsing import GATEWAY, ParserGateway, line_tokens
+from .base import (
     Finding,
     Location,
     ScanContext,
     claimed_capability_paths,
     iter_text_files,
 )
-from skill_lens.engines.e3_shellscan import (
+from .e3_shellscan import (
     _PLATFORM_DISABLED_RE,
     PERSONA_BASENAMES,
     _persona_kind,
     classify_path_literal,
 )
-from skill_lens.ir import SkillIR
-from skill_lens.parsing import GATEWAY, ParserGateway, line_tokens
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from skill_lens.rules import Rule
+    from ..rules import Rule
 
 #: Engine catalog binding (SPEC §4). REGISTRY keys must equal this.
 ENGINE_NAME = "pyscan"
@@ -1451,7 +1451,7 @@ class PyScanEngine:
 
 def _current_ctx() -> ScanContext:
     """Ambient scan context (engines/__init__ installs it around dispatch)."""
-    from skill_lens.engines.base import current_context
+    from .base import current_context
 
     return current_context()
 

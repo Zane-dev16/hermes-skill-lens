@@ -31,8 +31,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from skill_lens.diagnostics import SEVERITY_INFO, DiagnosticsCollector
-from skill_lens.engines.base import (
+from ..diagnostics import SEVERITY_INFO, DiagnosticsCollector
+from ..ingest import (
+    DEFAULT_CEILINGS,
+    Ceilings,
+    load_bundle,
+)
+from ..ir import SkillIR
+from ..rules import RulePack, load_core_pack
+from .base import (
     CODE_ENGINE_UNIMPLEMENTED,
     MAX_ATTACHED_LOCATIONS,
     Finding,  # re-exported convenience
@@ -43,37 +50,30 @@ from skill_lens.engines.base import (
     run_engine,
     set_scan_context,
 )
-from skill_lens.engines.e1_manifest import ENGINE_NAME as MANIFEST_ENGINE_NAME
-from skill_lens.engines.e1_manifest import RULE_IDS as MANIFEST_RULE_IDS
-from skill_lens.engines.e1_manifest import ManifestEngine
-from skill_lens.engines.e2_textinject import ENGINE_NAME as TEXTINJECT_ENGINE_NAME
-from skill_lens.engines.e2_textinject import RULE_IDS as TEXTINJECT_RULE_IDS
-from skill_lens.engines.e2_textinject import TextInjectEngine
-from skill_lens.engines.e3_shellscan import ENGINE_NAME as SHELLSCAN_ENGINE_NAME
-from skill_lens.engines.e3_shellscan import RULE_IDS as SHELLSCAN_RULE_IDS
-from skill_lens.engines.e3_shellscan import ShellScanEngine
-from skill_lens.engines.e4_pyscan import ENGINE_NAME as PYSCAN_ENGINE_NAME
-from skill_lens.engines.e4_pyscan import RULE_IDS as PYSCAN_RULE_IDS
-from skill_lens.engines.e4_pyscan import PyScanEngine
-from skill_lens.engines.e5_jsscan import ENGINE_NAME as JSSCAN_ENGINE_NAME
-from skill_lens.engines.e5_jsscan import RULE_IDS as JSSCAN_RULE_IDS
-from skill_lens.engines.e5_jsscan import JsScanEngine
-from skill_lens.engines.e6_netgraph import ENGINE_NAME as NETGRAPH_ENGINE_NAME
-from skill_lens.engines.e6_netgraph import RULE_IDS as NETGRAPH_RULE_IDS
-from skill_lens.engines.e6_netgraph import NetgraphEngine
-from skill_lens.engines.e7_secretscan import ENGINE_NAME as SECRETSCAN_ENGINE_NAME
-from skill_lens.engines.e7_secretscan import RULE_IDS as SECRETSCAN_RULE_IDS
-from skill_lens.engines.e7_secretscan import SecretScanEngine
-from skill_lens.engines.e8_depintel import ENGINE_NAME as DEPINTEL_ENGINE_NAME
-from skill_lens.engines.e8_depintel import RULE_IDS as DEPINTEL_RULE_IDS
-from skill_lens.engines.e8_depintel import DepIntelEngine
-from skill_lens.ingest import (
-    DEFAULT_CEILINGS,
-    Ceilings,
-    load_bundle,
-)
-from skill_lens.ir import SkillIR
-from skill_lens.rules import RulePack, load_core_pack
+from .e1_manifest import ENGINE_NAME as MANIFEST_ENGINE_NAME
+from .e1_manifest import RULE_IDS as MANIFEST_RULE_IDS
+from .e1_manifest import ManifestEngine
+from .e2_textinject import ENGINE_NAME as TEXTINJECT_ENGINE_NAME
+from .e2_textinject import RULE_IDS as TEXTINJECT_RULE_IDS
+from .e2_textinject import TextInjectEngine
+from .e3_shellscan import ENGINE_NAME as SHELLSCAN_ENGINE_NAME
+from .e3_shellscan import RULE_IDS as SHELLSCAN_RULE_IDS
+from .e3_shellscan import ShellScanEngine
+from .e4_pyscan import ENGINE_NAME as PYSCAN_ENGINE_NAME
+from .e4_pyscan import RULE_IDS as PYSCAN_RULE_IDS
+from .e4_pyscan import PyScanEngine
+from .e5_jsscan import ENGINE_NAME as JSSCAN_ENGINE_NAME
+from .e5_jsscan import RULE_IDS as JSSCAN_RULE_IDS
+from .e5_jsscan import JsScanEngine
+from .e6_netgraph import ENGINE_NAME as NETGRAPH_ENGINE_NAME
+from .e6_netgraph import RULE_IDS as NETGRAPH_RULE_IDS
+from .e6_netgraph import NetgraphEngine
+from .e7_secretscan import ENGINE_NAME as SECRETSCAN_ENGINE_NAME
+from .e7_secretscan import RULE_IDS as SECRETSCAN_RULE_IDS
+from .e7_secretscan import SecretScanEngine
+from .e8_depintel import ENGINE_NAME as DEPINTEL_ENGINE_NAME
+from .e8_depintel import RULE_IDS as DEPINTEL_RULE_IDS
+from .e8_depintel import DepIntelEngine
 
 __all__ = [
     "ENGINE_IMPLEMENTATIONS",
@@ -245,7 +245,7 @@ def run_all(
 
 
 def _typed_sort(finding: Finding) -> tuple[Any, ...]:
-    from skill_lens.engines.base import finding_sort_key
+    from .base import finding_sort_key
 
     return finding_sort_key(finding)
 
@@ -284,7 +284,7 @@ def dedup_finding_dicts(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def current_context() -> ScanContext:
     """Ambient context accessor re-exported for seam symmetry."""
-    from skill_lens.engines.base import current_context as _current
+    from .base import current_context as _current
 
     return _current()
 
@@ -380,7 +380,7 @@ def _build_context(target: Path, ir: SkillIR) -> ScanContext:
 
 def _zip_member_map(zip_path: Path) -> dict[str, bytes]:
     """Re-read zip members into memory (mirrors ingest caps/skip policy)."""
-    from skill_lens.ingest import MAX_SINGLE_FILE_BYTES, MAX_TOTAL_BYTES
+    from ..ingest import MAX_SINGLE_FILE_BYTES, MAX_TOTAL_BYTES
 
     members: dict[str, bytes] = {}
     total = 0

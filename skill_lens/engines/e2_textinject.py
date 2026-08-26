@@ -74,8 +74,10 @@ import unicodedata
 from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
-from skill_lens.claims import finding_fingerprint, is_declared
-from skill_lens.engines.base import (
+from ..claims import finding_fingerprint, is_declared
+from ..ir import SkillIR
+from ..parsing import GATEWAY, ParserGateway
+from .base import (
     Finding,
     Location,
     ScanContext,
@@ -83,11 +85,9 @@ from skill_lens.engines.base import (
     current_context,
     iter_text_files,
 )
-from skill_lens.ir import SkillIR
-from skill_lens.parsing import GATEWAY, ParserGateway
 
 if TYPE_CHECKING:
-    from skill_lens.rules import Rule
+    from ..rules import Rule
 
 #: Engine catalog binding (SPEC §4). REGISTRY keys must equal this.
 ENGINE_NAME = "textinject"

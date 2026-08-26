@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from skill_lens.render import (
+from .render import (
     ADVISOR_LINE,
     CHAT_HARD_BUDGET,
     CHAT_SOFT_BUDGET,

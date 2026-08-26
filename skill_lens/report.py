@@ -19,10 +19,10 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
 
-from skill_lens.baseline import apply_baselines
-from skill_lens.engines import ScanResult
-from skill_lens.ir import TOOL_NAME, tool_version
-from skill_lens.scoring import score_findings
+from .baseline import apply_baselines
+from .engines import ScanResult
+from .ir import TOOL_NAME, tool_version
+from .scoring import score_findings
 
 #: Envelope schema token (SPEC §12.3; additive growth stays inside report/1).
 REPORT_SCHEMA = "report/1"
@@ -148,7 +148,7 @@ def render_sarif(envelope: Mapping[str, Any]) -> dict[str, Any]:
     rule ids degrade to bare-id descriptors rather than inventing data.
     Deterministic: stable sorts everywhere, no wall-clock anywhere.
     """
-    from skill_lens.rules import load_core_pack
+    from .rules import load_core_pack
 
     pack = load_core_pack()
     findings = list(envelope.get("findings") or [])
@@ -268,7 +268,7 @@ def report_hash8(envelope: Mapping[str, Any]) -> str:
     bundle_hash = str((envelope.get("target") or {}).get("bundle_hash") or "")
     if bundle_hash.startswith("sha256:") and len(bundle_hash) >= len("sha256:") + 8:
         return bundle_hash[len("sha256:") :][:8]
-    from skill_lens.claims import finding_fingerprint
+    from .claims import finding_fingerprint
 
     return finding_fingerprint("report", "", repr(sorted(envelope))[:512])[len("sha256:") :][:8]
 

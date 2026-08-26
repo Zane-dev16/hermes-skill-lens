@@ -50,7 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from skill_lens.diagnostics import (
+from .diagnostics import (
     Diagnostic,
     DiagnosticsCollector,
 )
@@ -273,10 +273,16 @@ _CORE_PACK_DIR = "core"
 
 
 def core_pack_path() -> Path:
-    """Filesystem path of the embedded core pack (package data, offline)."""
+    """Filesystem path of the embedded core pack (package data, offline).
+
+    ``__package__`` (not a hard-coded "skill_lens") keeps this correct in
+    BOTH layouts: repo-rooted top-level imports AND the host's plugin load,
+    where these same files live as ``hermes_plugins.<key>.skill_lens``
+    (D-053 layout law).
+    """
     from importlib.resources import files
 
-    return Path(str(files("skill_lens") / "rules" / _CORE_PACK_DIR))
+    return Path(str(files(__package__ or "skill_lens") / "rules" / _CORE_PACK_DIR))
 
 
 def load_core_pack(

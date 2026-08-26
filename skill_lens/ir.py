@@ -29,7 +29,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from skill_lens.diagnostics import (
+from .diagnostics import (
     SEVERITY_WARNING,
     Diagnostic,
     DiagnosticsCollector,
@@ -38,7 +38,7 @@ from skill_lens.diagnostics import (
 
 def _render_overreach_section(claimed_paths: Iterable[str], actual_paths: Iterable[str]) -> str:
     """Lazy claims-module bridge (module-cycle safety: claims imports ir)."""
-    from skill_lens.claims import render_overreach_section
+    from .claims import render_overreach_section
 
     return render_overreach_section(claimed_paths, actual_paths)
 
@@ -92,7 +92,7 @@ CODE_FRONTMATTER_UNKNOWN = "LNS-FRONTMATTER-UNKNOWN"
 
 def tool_version() -> str:
     """Package version for the IR ``tool`` block (lazy import avoids cycles)."""
-    from skill_lens import __version__
+    from . import __version__
 
     return __version__
 
@@ -407,7 +407,7 @@ def extract_claims(ir: SkillIR) -> tuple[ClaimRecord, ...]:
     """
     if ir.frontmatter is None:
         return ()
-    from skill_lens.claims import extract_field_direct_claims
+    from .claims import extract_field_direct_claims
 
     return extract_field_direct_claims(ir.frontmatter)
 

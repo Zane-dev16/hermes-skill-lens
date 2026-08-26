@@ -54,8 +54,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from skill_lens.diagnostics import DiagnosticsCollector
-from skill_lens.policy import BaselineEntry, PolicyError
+from .diagnostics import DiagnosticsCollector
+from .policy import BaselineEntry, PolicyError
 
 #: Stable diagnostic/store constants.
 CODE_BASELINE_EXPIRED = "LNS-BASELINE-EXPIRED"
@@ -484,7 +484,7 @@ def resolve_baseline_entries(
     one-line notice — malformed suppression metadata must never silently
     stop suppressing).
     """
-    from skill_lens.policy import load_policy
+    from .policy import load_policy
 
     collector = diag if diag is not None else DiagnosticsCollector()
     store_records: tuple[BaselineRecord, ...] = ()

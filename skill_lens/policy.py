@@ -62,11 +62,11 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from skill_lens.diagnostics import (
+from .diagnostics import (
     Diagnostic,
     DiagnosticsCollector,
 )
-from skill_lens.scoring import (
+from .scoring import (
     CEILING_INTEGRITY,
     CEILING_MONEY,
     CEILING_SUSPECTED_CRITICAL,

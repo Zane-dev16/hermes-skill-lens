@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from skill_lens.canonical import canonical_dumps
+from .canonical import canonical_dumps
 
 #: Default FIFO bound. Bundles are small; 128 entries covers realistic
 #: skill-tree churn while keeping memory trivial.

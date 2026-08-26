@@ -25,8 +25,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from skill_lens.canonical import canonical_dumps
-from skill_lens.report import report_hash8
+from .canonical import canonical_dumps
+from .report import report_hash8
 
 #: Byte-frozen coverage footer (SPEC §12.6 — golden tests assert this exact
 #: text; do not rewrap, re-punctuate, or "fix" the middle dots).
