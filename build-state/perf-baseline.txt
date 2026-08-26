@@ -1,0 +1,12 @@
+Skill Lens perf baseline — fake lifecycle dispatch (PLAN §1 Phase 3)
+tool: scripts/perf_check.py · harness: tests/perf/harness.py
+
+probe bundle     : 148306 bytes (target 163840, ceiling contract <=1 MB)
+runs             : 24 cold / 24 cached
+cold  dispatch->ready : p50   316.6 ms   p95   332.1 ms   max   332.4 ms
+cached fast path      : p50     3.9 ms   p95     4.1 ms   max     4.3 ms
+budgets          : cold p95 <= 400 ms · cached p95 < 200 ms
+VERDICT          : PASS
+
+cold samples(ms) : 322 313 314 316 313 320 316 317 319 316 321 317 327 322 315 332 317 316 316 314 314 322 317 332
+cache samples(ms): 4.3 4.0 3.9 4.0 4.0 3.8 3.8 3.8 4.1 4.1 4.0 3.8 3.7 4.1 3.9 3.9 3.9 3.9 4.0 3.9 3.8 3.9 3.8 4.0
