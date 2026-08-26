@@ -341,6 +341,16 @@ class TestVagueDescriptionDetector:
             ("Keeps your workspace tidy.", False),
             ("Helps you stay organized across sessions.", False),
             ("", False),
+            # D-047 multilingual precision closure: genuinely concrete CJK/
+            # Arabic descriptions must read as concrete (corpus fixtures
+            # cjk-notes-helper / arabic-task-tracker pin this end-to-end).
+            ("把你的读书笔记保存到本地，按标签整理，并支持全文搜索与导出。", True),
+            ("メモを保存して検索します。", True),
+            ("작업을 저장하고 검색합니다.", True),
+            ("أداة لإدارة المهام: تنشئ قوائم وتحفظ التقدم محليا", True),
+            # Marketing-only copy in ANY language stays vague.
+            ("超棒的技能！马上体验！", False),
+            ("أفضل أداة على الإطلاق!", False),
         ],
     )
     def test_cue_calibration(self, description, concrete) -> None:

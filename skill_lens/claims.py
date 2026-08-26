@@ -254,17 +254,108 @@ _ALL_CUES: tuple[str, ...] = tuple(
 )
 _WORD_RE = re.compile(r"[a-z0-9_.]+")
 
+# Multilingual precision extension (D-047, FP-as-fixture closure): the Latin
+# stem table above tokenizes ``[a-z0-9_.]+`` ONLY, so a genuinely concrete
+# CJK/Arabic description tokenized to nothing and false-positived LNS-MAN-004.
+# The fix stays inside the rule's own semantics — cue-based concreteness,
+# conservative bias — and never touches the lexicon claim extractor (non-Latin
+# text still mints NO ClaimRecords; declared discounts remain a Latin-language
+# surface for now).
+#
+# Semantics per script: CJK text has no spaces, so cues are matched as
+# SUBSTRINGS of each ideograph/kana/hangul run; Arabic attaches clitics
+# (و / ال / ب …) directly to the stem, so substring matching absorbs them too.
+# Every cue is a full capability verb/noun morpheme (2+ letters), never a
+# single letter, so accidental containment inside marketing copy stays rare —
+# and the rule is LOW/static advisory regardless (heuristic band, D-FP cap).
+_CJKV_RUN_RE = re.compile("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+")
+_ARABIC_RUN_RE = re.compile("[\u0600-\u06ff\u0750-\u077f\ufb50-\ufdff\ufe70-\ufeff]+")
+
+#: CJKV capability morphemes (zh/ja shared kanji forms + hangul words).
+CJKV_CAPABILITY_CUES: tuple[str, ...] = (
+    "保存",
+    "备份",
+    "同步",
+    "搜索",
+    "整理",
+    "导出",
+    "下载",
+    "上传",
+    "发送",
+    "提醒",
+    "记录",
+    "管理",
+    "生成",
+    "转换",
+    "翻译",
+    "安装",
+    "执行",
+    "扫描",
+    "读取",
+    "写入",
+    "저장",
+    "검색",
+    "관리",
+    "생성",
+    "변환",
+    "전송",
+    "다운로드",
+    "업로드",
+    "백업",
+    "알림",
+    "실행",
+    "설치",
+    "기록",
+    "번역",
+)
+
+#: Arabic capability stems (matched inside clitic-attached tokens).
+ARABIC_CAPABILITY_CUES: tuple[str, ...] = (
+    "حفظ",
+    "بحث",
+    "إدارة",
+    "إنشاء",
+    "تحويل",
+    "تنزيل",
+    "رفع",
+    "إرسال",
+    "تذكير",
+    "مزامنة",
+    "ترجمة",
+    "تنفيذ",
+    "تثبيت",
+    "فحص",
+    "قراءة",
+    "كتابة",
+)
+
+
+def _multilingual_cue_match(text: str) -> bool:
+    """Substring-cue concreteness for CJKV/Arabic runs (D-047). Pure."""
+    for run in _CJKV_RUN_RE.findall(text):
+        if any(cue in run for cue in CJKV_CAPABILITY_CUES):
+            return True
+    for run in _ARABIC_RUN_RE.findall(text):
+        if any(cue in run for cue in ARABIC_CAPABILITY_CUES):
+            return True
+    return False
+
 
 def description_states_concrete_capability(description_raw: str | None) -> bool:
     """True when *description_raw* contains at least one §9.2-family cue.
 
     Stem/prefix match over lowercased words (so "environment" hits the
-    ``env`` credential stem and "Generates" hits ``generat``). Empty,
+    ``env`` credential stem and "Generates" hits ``generat``). CJK/Arabic
+    descriptions are checked against the multilingual morpheme tables
+    (D-047) so genuinely concrete non-English skills stay silent. Empty,
     missing, and pure-marketing descriptions return False — precisely the
     §9.2 vague-copy population LNS-MAN-004 addresses.
     """
-    words = _WORD_RE.findall((description_raw or "").lower())
-    return any(word.startswith(cue) for word in words for cue in _ALL_CUES)
+    raw = description_raw or ""
+    words = _WORD_RE.findall(raw.lower())
+    if any(word.startswith(cue) for word in words for cue in _ALL_CUES):
+        return True
+    return _multilingual_cue_match(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -989,6 +1080,8 @@ __all__ = [
     "CLAIM_STAGE_RULE_ID",
     "CLAIM_STAGE_RULE_IDS",
     "COMPATIBILITY_PHRASES",
+    "ARABIC_CAPABILITY_CUES",
+    "CJKV_CAPABILITY_CUES",
     "MESSAGING_CLAIM_CAPABILITY",
     "RELATED_SKILLS_CAPABILITY",
     "SCHEDULER_CLAIM_CAPABILITY",
