@@ -6,6 +6,13 @@ SKILL.md, name/dirname mismatch, zip target, variable-depth quarantine,
 lockfile provenance) and asserts :func:`skill_lens.inventory.scan_inventory`
 produces a BYTE-IDENTICAL canonical envelope across two runs (DETERMINISM
 LAW / PLAN Phase 0 exit), plus structural sanity on envelope contents.
+
+Sidecar EXCLUSION (Phase 2): runtime worker state —
+``<plugin-data>/lens/jobs.json`` and ``events.ndjson`` (plus cached reports
+under ``reports/``) — carries wall-clock timestamps BY DESIGN and sits in
+the same exemption class as ``_meta``: never an input to any canonical
+envelope, therefore excluded from every determinism assertion here and in
+the CI byte-compare job.
 """
 
 from __future__ import annotations

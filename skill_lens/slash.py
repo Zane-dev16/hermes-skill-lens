@@ -25,17 +25,31 @@ import os
 import shlex
 import threading
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from skill_lens.cache import CacheEntry, FastPathCache, key_for_ir
+from skill_lens.baseline import (
+    BaselineRecord,
+    baseline_cache_suffix,
+    baseline_path_for,
+    collect_baseline_records,
+    merge_records,
+    read_baseline,
+    resolve_baseline_entries,
+    write_baseline,
+)
+from skill_lens.cache import CacheEntry, FastPathCache, hash8, key_for_ir
 from skill_lens.canonical import canonical_dumps
 from skill_lens.context import PluginContextView
 from skill_lens.engines import ScanDeadlineBreach
+from skill_lens.policy import PolicyError, policy_failure_notice
 from skill_lens.render import (
     counts_phrase,
+    fast_line_coalesced,
     fast_line_fail,
     fast_line_ok,
+    fast_line_scan_queued,
     render_chat_compact,
 )
 from skill_lens.report import build_report
@@ -53,13 +67,18 @@ _USAGE = """```\
 usage: /lens <verb> [target] [flags]
 
 verbs:
-  scan <name|path>   scan a skill bundle now (collapsed chat report)
-  report [name]      latest cached report for an installed skill
-  help               this block
+  scan <name|path>     queue a security scan (cold scans run on the lens worker;
+                       cache hits answer inline)
+  report [name]        latest cached report for an installed skill
+  baseline <name> --reason "…" [--expires DATE]
+                       record current fingerprints into <skill>/.lens/baseline.toml
+  explain-rules [--rule ID]
+                       effective rule set + provenance; single-rule detail card
+  diff <reportA|name> [<reportB|name>]
+                       shift-stable fingerprint comparison (new/fixed/persisted)
+  help                 this block
 
-flags (scan):
-  --json       canonical report/1 envelope in a json fence (byte-stable)
-  --no-cache   ignore the fast-path cache and rescan
+flags (scan): --json · --no-cache
 
 advisor only — lens never blocks installs. clean scan ≠ safe skill.\
 ```"""
@@ -115,9 +134,54 @@ def _deadline_from_start(start: float) -> Any:
     return exceeded
 
 
+def _today() -> date:
+    """The surface-boundary clock seam (the ONLY wall-clock read in verbs).
+
+    Expiry enforcement (baselines, severity overrides) necessarily consumes
+    a current date; the deterministic core takes it as a PARAMETER and the
+    envelope never embeds it — this helper is where the boundary injects it.
+    Tests drive the core with fixed dates instead.
+    """
+    return date.today()
+
+
+def _baseline_state(
+    view: PluginContextView | None, target_path: Path | None
+) -> tuple[tuple[BaselineRecord, ...], str]:
+    """Effective baseline records + cache-key suffix for one target.
+
+    Raises :class:`PolicyError` on broken configuration (strict lane —
+    malformed suppression metadata must never silently stop suppressing).
+    The project layer resolves against the TARGET's directory: an installed
+    skill or bundle dir carries its own ``.lens/`` config.
+    """
+    if view is None:
+        return (), ""
+    target_dir = target_path if (target_path is not None and target_path.is_dir()) else None
+    if target_dir is None and target_path is not None:
+        parent = target_path.parent
+        target_dir = parent if parent.is_dir() else None
+    report_date = _today()
+    records = resolve_baseline_entries(view=view, target_dir=target_dir, report_date=report_date)
+    return records, baseline_cache_suffix(records, report_date=report_date)
+
+
+def _scan_raw(target_path: Path) -> Any:
+    """Deadline-bounded scan WITHOUT suppression (fingerprint collection)."""
+    from skill_lens.engines import scan_bundle
+
+    start = time.monotonic()
+    return scan_bundle(target_path, deadline=_deadline_from_start(start))
+
+
 # ---------------------------------------------------------------------------
-# Scan execution (interim inline model)
+# Scan execution (queue-first model, SPEC §11.5)
 # ---------------------------------------------------------------------------
+#
+# Phase-2 execution contract: the reply path NEVER runs engines.
+# run_scan remains the ONE full-pipeline pass and is now called from the
+# lens worker thread only (skill_lens.jobs.pipeline_runner) plus the
+# synchronous refresh arms of the baseline/diff verbs.
 
 
 def run_scan(
@@ -125,12 +189,23 @@ def run_scan(
     *,
     cache: FastPathCache,
     plugin_data_dir: Path,
+    baseline_records: tuple[BaselineRecord, ...] = (),
+    key_suffix: str = "",
+    report_date: date | None = None,
 ) -> dict[str, Any]:
     """One full pipeline pass; returns render inputs, never raises.
 
-    Shape: ``{"ok": bool, "envelope": dict|None, "compact": str|None,
+    Callers (Phase 2 queue-first model): the lens worker thread via
+    :func:`skill_lens.jobs.pipeline_runner` (the ONLY cold-scan executor —
+    ``/lens scan`` misses enqueue instead of calling this inline), plus the
+    synchronous refresh arms of the baseline and diff verbs. Shape:
+    ``{"ok": bool, "envelope": dict|None, "compact": str|None,
     "error": str|None}``. The cache is consulted after ingest (cheap hash)
-    and populated on success.
+    and populated on success. *key_suffix* folds the effective baseline set
+    into the cache key so a changed suppression set invalidates fast-path
+    answers rendered under a different one; empty suffix keeps historical
+    keys byte-identical. Baselines apply AFTER dedup BEFORE scoring inside
+    :func:`build_report` (DECISIONS D-042 ordering row).
     """
     from skill_lens.engines import scan_bundle
 
@@ -139,7 +214,7 @@ def run_scan(
 
     result = scan_bundle(target_path, deadline=deadline)
     ir = result.ir
-    key = key_for_ir(ir)
+    key = key_for_ir(ir) + key_suffix
     cached = cache.get(key)
     if cached is not None and cached.envelope_json is not None and cached.compact_text:
         return {
@@ -151,7 +226,7 @@ def run_scan(
             "error": None,
         }
 
-    envelope = build_report(result)
+    envelope = build_report(result, baseline_entries=baseline_records, report_date=report_date)
     compact = render_chat_compact(envelope, plugin_data_dir=plugin_data_dir)
     envelope_text = canonical_dumps(envelope)
     score = envelope.get("score") or {}
@@ -159,7 +234,7 @@ def run_scan(
         bundle_hash=key,
         name=ir.identity.name,
         grade=str(score.get("grade", "?")),
-        value=int(score.get("value", 0)),
+        value=_score_int(score.get("value")),
         verdict=str(score.get("verdict", "clean")),
         counts=counts_phrase(envelope),
         cached_at=time.monotonic(),
@@ -187,6 +262,7 @@ def _verb_scan(
     *,
     view: PluginContextView,
     cache: FastPathCache,
+    jobs: Any,
 ) -> str:
     want_json = "--json" in args
     positional = [a for a in args if not a.startswith("--")]
@@ -203,69 +279,89 @@ def _verb_scan(
 
     plugin_data_dir = view.plugin_data_dir()
 
-    # Fast path first: ingest + hash is cheap; a live cache entry answers
-    # without running engines (<200 ms contract, PLAN Phase 1).
-    if not no_cache:
-        quick = _try_cache_hit(target_path, cache=cache, want_json=want_json)
-        if quick is not None:
-            return quick
+    # Config-seam errors (PolicyError) deliberately PROPAGATE from here:
+    # the slash safe-handler renders the one-line notice; the CLI dispatcher
+    # maps them to §18 exit 2. Same wording both lanes (D-SURF).
+    baseline_records, key_suffix = _baseline_state(view, target_path)
 
-    try:
-        outcome = run_scan(target_path, cache=cache, plugin_data_dir=plugin_data_dir)
-    except ScanDeadlineBreach as exc:
-        logger.warning("/lens scan hit internal deadline: %s", exc)
-        return fast_line_fail(
-            name=display_name,
-            reason=f"internal scan deadline ({int(INTERNAL_SCAN_DEADLINE_SECONDS)}s) exceeded",
-        )
-    except Exception as exc:  # noqa: BLE001 — handler never raises into the host
-        logger.exception("/lens scan failed")
-        reason = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
-        return fast_line_fail(name=display_name, reason=f"unreadable target: {reason}")
+    # Fast path first: ingest + hash is cheap and runs inline (<200 ms
+    # contract, PLAN Phase 1); a live cache entry answers WITHOUT engines.
+    ir, hit_text = _probe_cache(
+        target_path, cache=cache, want_json=want_json, key_suffix=key_suffix, skip=no_cache
+    )
+    if hit_text is not None:
+        return hit_text
+    if ir is None:  # load_bundle contract says never; keep a sober D-line anyway
+        return fast_line_fail(name=display_name, reason=f"unreadable target: {positional[0]}")
 
-    if want_json:
-        body = outcome.get("envelope_json") or canonical_dumps(outcome.get("envelope") or {})
-        return f"```json\n{body}\n```"
-    text = outcome.get("compact")
-    assert isinstance(text, str) and text  # run_scan guarantees a render
-    return text
+    # Cold path (SPEC §11.5): enqueue on the worker, answer with the fixed
+    # format-B one-liner. The reply path never waits on engines.
+    from skill_lens.jobs import ScanContext  # lazy: jobs.py owns the worker seams
+
+    bundle_hash = key_for_ir(ir)
+    decision = jobs.enqueue(
+        name=display_name,
+        target=target_path,
+        bundle_hash=bundle_hash,
+        cache_key=bundle_hash + key_suffix,
+        context=ScanContext(
+            baseline_records=baseline_records,
+            key_suffix=key_suffix,
+            report_date=_today(),
+            plugin_data_dir=plugin_data_dir,
+            cache=cache,
+        ),
+    )
+    if decision.coalesced:
+        return fast_line_coalesced(name=display_name, hash8=hash8(bundle_hash))
+    return fast_line_scan_queued(name=display_name, hash8=hash8(bundle_hash))
 
 
-def _try_cache_hit(target_path: Path, *, cache: FastPathCache, want_json: bool) -> str | None:
-    """Answer from the cache when the bundle bytes are unchanged.
+def _probe_cache(
+    target_path: Path,
+    *,
+    cache: FastPathCache,
+    want_json: bool,
+    key_suffix: str = "",
+    skip: bool = False,
+) -> tuple[Any, str | None]:
+    """Ingest once, then answer from the cache when bytes are unchanged.
 
-    Serves whichever artifact the invocation asked for: the canonical JSON
-    fence for ``--json``, the collapsed compact render otherwise.
+    Returns ``(ir, hit_text)`` — *ir* feeds the enqueue hash on a miss;
+    *hit_text* is the served artifact (canonical JSON fence for ``--json``,
+    collapsed compact render otherwise) or None. *skip* (--no-cache) skips
+    the lookup but still returns the IR so the scan can queue.
     """
     from skill_lens.ingest import DEFAULT_CEILINGS, load_bundle
 
     try:
         ir = load_bundle(target_path, ceilings=DEFAULT_CEILINGS)
-    except Exception:  # noqa: BLE001 — fall through to the full-scan error path
-        return None
-    entry = cache.get(key_for_ir(ir))
+    except Exception:  # noqa: BLE001 — ingest contract says never; degrade to D-lane
+        return None, None
+    if skip:
+        return ir, None
+    entry = cache.get(key_for_ir(ir) + key_suffix)
     if entry is None or entry.envelope_json is None or entry.compact_text is None:
-        return None
+        return ir, None
     if want_json:
-        return f"```json\n{entry.envelope_json}\n```"
-    return entry.compact_text
+        return ir, f"```json\n{entry.envelope_json}\n```"
+    return ir, entry.compact_text
 
 
-def _verb_report(args: list[str], *, cache: FastPathCache) -> str:
+def _verb_report(args: list[str], *, cache: FastPathCache, jobs: Any = None) -> str:
     positional = [a for a in args if not a.startswith("--")]
     name = positional[0] if positional else None
     entry: CacheEntry | None = None
     if name is not None:
         entry = cache.latest_by_name(name)
         if entry is None:
-            return (
-                f"no lens report cached for {name!r} — run `/lens scan {name}` "
-                "(cold scans answer on completion)"
-            )
+            return _report_without_entry(name, jobs=jobs)
     else:
         entry = _latest_entry(cache)
         if entry is None:
             return "no lens reports cached yet — run `/lens scan <name|path>` first"
+    if jobs is not None:
+        jobs.mark_fetched(entry.name)  # pull clears the ready banner (§11.5)
     if entry.compact_text:
         return entry.compact_text
     return fast_line_ok(
@@ -275,6 +371,19 @@ def _verb_report(args: list[str], *, cache: FastPathCache) -> str:
         verdict=entry.verdict,
         counts=entry.counts,
         cached_seconds=entry.age_seconds(),
+    )
+
+
+def _report_without_entry(name: str, *, jobs: Any) -> str:
+    """No cached artifact: surface the job trail honestly (§11.5)."""
+    job = jobs.latest_job_for_name(name) if jobs is not None else None
+    if job is not None and job.state == "failed":
+        return fast_line_fail(name=name, reason=job.error or "scan failed")
+    if job is not None and job.state in ("queued", "scanning"):
+        return fast_line_scan_queued(name=name, hash8=hash8(job.bundle_hash))
+    return (
+        f"no lens report cached for {name!r} — run `/lens scan {name}` "
+        "(cold scans answer on completion)"
     )
 
 
@@ -294,6 +403,328 @@ def _latest_entry(cache: FastPathCache) -> CacheEntry | None:
             newest_at = entry.cached_at
             best = entry
     return best
+
+
+# ---------------------------------------------------------------------------
+# baseline · explain-rules · diff verbs (Phase 2; SPEC §11.2)
+# ---------------------------------------------------------------------------
+
+
+def _split_flag(args: list[str], flag: str) -> tuple[list[str], str | None, list[str]]:
+    """Extract one value-carrying ``--flag VALUE`` from token list.
+
+    Returns ``(remaining_args, value_or_None, errors)``; a dangling flag or
+    a duplicate records an error string naming the offender.
+    """
+    remaining: list[str] = []
+    value: str | None = None
+    errors: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == flag:
+            if index + 1 >= len(args):
+                errors.append(f"{flag} requires a value")
+                index += 1
+                continue
+            if value is not None:
+                errors.append(f"{flag} given twice")
+            value = args[index + 1]
+            index += 2
+            continue
+        remaining.append(token)
+        index += 1
+    return remaining, value, errors
+
+
+def _verb_baseline(args: list[str], *, view: PluginContextView, cache: FastPathCache) -> str:
+    """``/lens baseline <name> --reason "…" [--expires DATE]`` (§11.2).
+
+    Records the CURRENT fingerprints of one directory-resolved target into
+    its canonical ``.lens/baseline.toml`` store (duplicate fingerprints keep
+    the earlier expiry), then refreshes the cached report under the new
+    suppression set so `/lens report` answers with post-suppression state.
+    The D-CRASH isolation finding is never recorded (breakage telemetry,
+    not behavior).
+    """
+    remaining, reason, errors = _split_flag(args, "--reason")
+    remaining, expires_raw, expiry_errors = _split_flag(remaining, "--expires")
+    errors.extend(expiry_errors)
+    positional = [a for a in remaining if not a.startswith("--")]
+    unknown_flags = [a for a in remaining if a.startswith("--")]
+    if unknown_flags:
+        return _usage_line(offender=unknown_flags[0])
+    if errors:
+        return (
+            f"lens fail baseline · {errors[0]} · usage: /lens baseline <name> "
+            '--reason "…" [--expires DATE]'
+        )
+    if not positional:
+        return 'usage: /lens baseline <name> --reason "…" [--expires DATE] — a reason is REQUIRED'
+    if not reason or not reason.strip():
+        return "a --reason is REQUIRED (suppressions must justify themselves) — /lens help"
+
+    target_path, display_name = resolve_target(positional[0])
+    if target_path is None:
+        return fast_line_fail(name=display_name, reason=f"unresolvable target: {positional[0]}")
+    if not target_path.is_dir():
+        return fast_line_fail(
+            name=display_name,
+            reason="baseline store needs a directory target (.lens/baseline.toml)",
+        )
+
+    expires = None
+    if expires_raw is not None:
+        try:
+            expires = date.fromisoformat(expires_raw.strip())
+        except ValueError:
+            return f"unparsable --expires {expires_raw!r} (want ISO YYYY-MM-DD) — nothing written"
+
+    store_path = baseline_path_for(target_path)
+    existing = read_baseline(store_path)  # PolicyError ⇒ surface error lane
+    try:
+        existing = read_baseline(store_path)
+    except PolicyError as exc:
+        return policy_failure_notice(exc)
+
+    try:
+        result = _scan_raw(target_path)
+    except ScanDeadlineBreach:
+        return fast_line_fail(
+            name=display_name,
+            reason=f"internal scan deadline ({int(INTERNAL_SCAN_DEADLINE_SECONDS)}s) exceeded",
+        )
+    except Exception as exc:  # noqa: BLE001 — handler never raises into the host
+        logger.exception("/lens baseline scan failed")
+        reason_text = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+        return fast_line_fail(name=display_name, reason=f"unreadable target: {reason_text}")
+
+    fresh_records = collect_baseline_records(result.findings)
+    if expires is not None:
+        # The verb's --expires annotates the NEWLY recorded fingerprints;
+        # existing entries keep their own expiry (merge keeps the earlier).
+        fresh_records = [
+            BaselineRecord(
+                fingerprint=record.fingerprint,
+                reason=record.reason,
+                expires=expires,
+                rule_id=record.rule_id,
+                path=record.path,
+            )
+            for record in fresh_records
+        ]
+    merged = merge_records(existing, fresh_records)
+    added = len(merged) - len({record.fingerprint for record in existing})
+    write_baseline(store_path, merged)  # OSError ⇒ PolicyError ⇒ error lane
+
+    # Refresh the cached report under the new suppression set.
+    plugin_data_dir = view.plugin_data_dir()
+    try:
+        outcome = run_scan(
+            target_path,
+            cache=cache,
+            plugin_data_dir=plugin_data_dir,
+            baseline_records=merged,
+            key_suffix=baseline_cache_suffix(merged, report_date=_today()),
+            report_date=_today(),
+        )
+    except Exception:  # noqa: BLE001 — refresh is best-effort; the write already happened
+        logger.exception("/lens baseline refresh scan failed")
+        outcome = {}
+    suppressed_now = _count_suppressed(outcome) if outcome.get("envelope_json") else 0
+
+    expiries = sorted(record.expires for record in merged if record.expires is not None)
+    expires_text = expiries[0].isoformat() if expiries else "none"
+    line = (
+        f"lens baseline {display_name} · +{added} new · {len(merged)} stored · "
+        f"{suppressed_now} suppressed now · expires {expires_text} · /lens report {display_name}"
+    )
+    from skill_lens.render import FAST_LINE_MAX_CHARS
+
+    return line[: FAST_LINE_MAX_CHARS - 1] + "…" if len(line) >= FAST_LINE_MAX_CHARS else line
+
+
+def _score_int(value: Any) -> int:
+    """Tolerant int coercion for our own scorer output (never-raise law)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _count_suppressed(outcome: dict[str, Any]) -> int:
+    """Suppressed-count from a run_scan outcome's JSON artifact (tolerant)."""
+    import json as _json
+
+    try:
+        envelope = _json.loads(str(outcome.get("envelope_json") or "{}"))
+        return int(envelope.get("suppressed_count") or 0)
+    except Exception:  # noqa: BLE001 — display-only helper
+        return 0
+
+
+def _verb_explain(args: list[str], *, view: PluginContextView) -> str:
+    """``/lens explain-rules [--rule ID]`` — D-EXPLAIN mechanical rendering."""
+    remaining, rule_id, errors = _split_flag(args, "--rule")
+    positional = [a for a in remaining if not a.startswith("--")]
+    unknown_flags = [a for a in remaining if a.startswith("--")]
+    if unknown_flags:
+        return _usage_line(offender=unknown_flags[0])
+    if positional:
+        return _usage_line(offender=positional[0])
+    if errors:
+        return f"lens fail explain-rules · {errors[0]} · /lens help"
+
+    from skill_lens.policy import load_policy
+    from skill_lens.rules import load_core_pack
+
+    policy = load_policy(ctx=view, report_date=_today())  # may raise PolicyError
+    try:
+        pack = load_core_pack()
+    except Exception as exc:  # noqa: BLE001 — pack faults are total-error lane wording
+        logger.exception("/lens explain-rules could not load the rule pack")
+        detail = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+        return fast_line_fail(name="explain-rules", reason=f"rule pack unreadable: {detail}")
+
+    from skill_lens.explain import explain_rules
+
+    text, notice = explain_rules(
+        pack,
+        policy,
+        rule_id=rule_id,
+        plugin_data_dir=view.plugin_data_dir(),
+    )
+    return notice if notice else text
+
+
+def _load_report_envelope(
+    token: str,
+    *,
+    view: PluginContextView,
+    cache: FastPathCache,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve one diff source: report JSON file → cached report → live scan.
+
+    Returns ``(envelope, error_notice)`` — exactly one is non-None.
+    """
+    import json as _json
+
+    candidate = Path(token).expanduser()
+    try:
+        if candidate.is_file():
+            data = _json.loads(candidate.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("schema") == "report/1":
+                return data, None
+            return (
+                None,
+                f"not a lens report/1 JSON file: {token}",
+            )
+    except OSError:
+        return None, f"cannot read report file {token}"
+    except ValueError:
+        return None, f"not valid JSON: {token}"
+
+    entry = cache.latest_by_name(token)
+    if entry is not None and entry.envelope_json:
+        try:
+            data = _json.loads(entry.envelope_json)
+        except ValueError:
+            return None, f"cached report for {token!r} is corrupt — rescan it"
+        return data, None
+
+    target_path, _display = resolve_target(token)
+    if target_path is not None:
+        envelope = _fresh_envelope(view=view, cache=cache, target_path=target_path)
+        if envelope is not None:
+            return envelope, None
+        return None, f"scan failed for target {token} — see logs; /lens doctor"
+    return None, f"cannot resolve diff source: {token}"
+
+
+def _fresh_envelope(
+    *, view: PluginContextView, cache: FastPathCache, target_path: Path
+) -> dict[str, Any] | None:
+    """Run one suppressed-current pipeline pass; envelope dict or None."""
+    import json as _json
+
+    try:
+        baseline_records, key_suffix = _baseline_state(view, target_path)
+        outcome = run_scan(
+            target_path,
+            cache=cache,
+            plugin_data_dir=view.plugin_data_dir(),
+            baseline_records=baseline_records,
+            key_suffix=key_suffix,
+            report_date=_today(),
+        )
+    except PolicyError:
+        # Config seam ⇒ surface lane decides (notice vs exit 2).
+        raise
+    except Exception:  # noqa: BLE001 — diff degrades to a notice, never a crash
+        logger.exception("diff fresh-scan failed")
+        return None
+    body = outcome.get("envelope_json")
+    if not body:
+        return None
+    try:
+        data = _json.loads(body)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _verb_diff(args: list[str], *, view: PluginContextView, cache: FastPathCache) -> str:
+    """``/lens diff <reportA|name> [<reportB|name>]`` (§11.2).
+
+    Two sources compare directly; ONE name diffs its latest cached report
+    against a FRESH scan of that target (the §11.2 "vs installed tree" arm).
+    """
+    positional = [a for a in args if not a.startswith("--")]
+    unknown_flags = [a for a in args if a.startswith("--")]
+    if unknown_flags:
+        return _usage_line(offender=unknown_flags[0])
+    if not positional or len(positional) > 2:
+        return "usage: /lens diff <reportA|name> [<reportB|name>] — /lens help"
+
+    from skill_lens.diff import diff_reports, render_diff
+
+    if len(positional) == 2:
+        left, err_a = _load_report_envelope(positional[0], view=view, cache=cache)
+        if err_a:
+            return f"lens fail diff · {err_a}"
+        right, err_b = _load_report_envelope(positional[1], view=view, cache=cache)
+        if err_b:
+            return f"lens fail diff · {err_b}"
+        old_env, new_env = left, right
+    else:
+        target_path, display_name = resolve_target(positional[0])
+        if target_path is None:
+            return fast_line_fail(
+                name=positional[0], reason=f"unresolvable target: {positional[0]}"
+            )
+        prior = cache.latest_by_name(display_name)
+        old_env: dict[str, Any] | None = None
+        if prior is not None and prior.envelope_json:
+            import json as _json
+
+            try:
+                loaded = _json.loads(prior.envelope_json)
+                old_env = loaded if isinstance(loaded, dict) else None
+            except ValueError:
+                old_env = None
+        if old_env is None:
+            return f"no cached report for {display_name!r} to diff against — run /lens scan first"
+        new_env = _fresh_envelope(view=view, cache=cache, target_path=target_path)
+        if new_env is None:
+            return fast_line_fail(name=display_name, reason="rescan for diff failed")
+
+    outcome = diff_reports(old_env or {}, new_env or {})
+    return render_diff(
+        outcome,
+        plugin_data_dir=view.plugin_data_dir(),
+        old_envelope=old_env,
+        new_envelope=new_env,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -337,27 +768,110 @@ def reset_shared_cache() -> None:
         _shared_cache = None
 
 
-def make_handler(view: PluginContextView, cache: FastPathCache) -> Any:
+_shared_jobs_lock = threading.Lock()
+_shared_jobs: Any | None = None  # JobManager; typed loose to keep the lazy import
+
+
+def shared_jobs(view: PluginContextView | None = None) -> Any:
+    """Process-wide :class:`~skill_lens.jobs.JobManager` (lazy singleton).
+
+    Created on first use against *view*'s plugin-data dir so jobs.json /
+    events.ndjson land in durable state. Tests reset via
+    :func:`reset_shared_jobs`.
+    """
+    global _shared_jobs
+    with _shared_jobs_lock:
+        if _shared_jobs is None:
+            from skill_lens.jobs import JobManager
+
+            if view is not None:
+                data_dir = view.plugin_data_dir()
+            else:
+                data_dir = hermes_home() / "plugin-data" / "lens"
+            _shared_jobs = JobManager(plugin_data_dir=data_dir)
+        return _shared_jobs
+
+
+def reset_shared_jobs() -> None:
+    """Shut down and drop the process-wide manager (test seam)."""
+    global _shared_jobs
+    with _shared_jobs_lock:
+        manager = _shared_jobs
+        _shared_jobs = None
+    if manager is not None:
+        try:
+            manager.shutdown(timeout=2.0)
+        except Exception:  # noqa: BLE001 — test seam must never raise
+            logger.debug("reset_shared_jobs shutdown hiccup", exc_info=True)
+
+
+def _first_token(raw_args: str | None) -> str | None:
+    tokens = (raw_args or "").split()
+    return tokens[0] if tokens else None
+
+
+def dispatch_verb(
+    raw_args: str,
+    *,
+    view: PluginContextView,
+    cache: FastPathCache,
+    jobs: Any | None = None,
+) -> str:
+    """Route one raw verb invocation. RAISES :class:`PolicyError`.
+
+    The shared routing table for BOTH surfaces (§11.2 verbs shared by CLI
+    and slash). Callers pick the error lane: the slash safe-handler renders
+    the one-line notice; the CLI dispatcher maps to §18 exit codes.
+
+    Pull banner (§11.5): ready-but-unfetched reports prepend a one-line
+    ``N reports ready`` notice on every invocation except ``help`` and the
+    fetching verb itself (``report``). The full P4 delivered-results UX
+    builds on this counting seam.
+    """
+    try:
+        tokens = shlex.split(raw_args or "")
+    except ValueError:
+        return _usage_line(offender=_first_token(raw_args))
+    verb = tokens[0].lower() if tokens else "help"
+    args = tokens[1:]
+    manager = jobs if jobs is not None else shared_jobs(view)
+    if verb in ("help", "-h", "--help"):
+        return _USAGE
+    if verb == "scan":
+        result = _verb_scan(args, view=view, cache=cache, jobs=manager)
+    elif verb == "report":
+        return _verb_report(args, cache=cache, jobs=manager)
+    elif verb == "baseline":
+        result = _verb_baseline(args, view=view, cache=cache)
+    elif verb in ("explain-rules", "explain"):
+        result = _verb_explain(args, view=view)
+    elif verb == "diff":
+        result = _verb_diff(args, view=view, cache=cache)
+    else:
+        return _usage_line(offender=verb)
+    banner = manager.banner_line()
+    return f"{banner}\n{result}" if banner else result
+
+
+def make_handler(
+    view: PluginContextView,
+    cache: FastPathCache,
+    *,
+    jobs: Any | None = None,
+) -> Any:
     """Build the ``fn(raw_args) -> str | None`` slash handler."""
 
     def handler(raw_args: str) -> str | None:
-        try:
-            tokens = shlex.split(raw_args or "")
-        except ValueError:
-            return _usage_line(offender=(raw_args or "").split()[0] if raw_args else None)
-        verb = tokens[0].lower() if tokens else "help"
-        args = tokens[1:]
-        if verb in ("help", "-h", "--help"):
-            return _USAGE
-        if verb == "scan":
-            return _verb_scan(args, view=view, cache=cache)
-        if verb == "report":
-            return _verb_report(args, cache=cache)
-        return _usage_line(offender=verb)
+        return dispatch_verb(raw_args, view=view, cache=cache, jobs=jobs)
 
     def safe_handler(raw_args: str) -> str | None:
         try:
             return handler(raw_args)
+        except PolicyError as exc:
+            # Configuration-seam lane (A1 seam): malformed policy/baseline
+            # config renders the ONE-LINE notice in-session, never exit codes.
+            logger.warning("/lens policy error surfaced to session: %s", exc.message)
+            return policy_failure_notice(exc)
         except Exception:  # noqa: BLE001 — the advisor law, enforced twice
             logger.exception("/lens handler raised; returning sober notice")
             return fast_line_fail(name="lens", reason="internal error — see logs; /lens doctor")
@@ -377,7 +891,7 @@ def register_slash(
     """
     owned_cache = cache if cache is not None else shared_cache()
     description = "Skill Lens — deterministic security reports for skill bundles (advisory)"
-    args_hint = "scan|report|help · flags: --json --no-cache"
+    args_hint = "scan|report|baseline|explain-rules|diff|help · flags: --json --no-cache"
     handle = make_handler(view, owned_cache)
     registration = view.register_command(
         SLASH_COMMAND,
@@ -397,7 +911,9 @@ __all__ = [
     "make_handler",
     "register_slash",
     "reset_shared_cache",
+    "reset_shared_jobs",
     "resolve_target",
     "run_scan",
     "shared_cache",
+    "shared_jobs",
 ]

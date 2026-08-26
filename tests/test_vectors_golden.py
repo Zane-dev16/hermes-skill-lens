@@ -223,22 +223,53 @@ def test_raising_engine_with_bound_rules_is_contained(tmp_path: Path) -> None:
 
 
 def test_slash_scan_json_byte_stable_across_runs(tmp_path: Path) -> None:
-    """/lens scan --json twice ⇒ identical bytes; no _meta inside."""
+    """Slash-served ``--json`` equals an independent pipeline pass, byte-exact.
+
+    Phase-2 queue-first: the cold scan queues (format-B line); once the
+    worker lands it, ``scan --json`` is a cache HIT serving the canonical
+    envelope. Byte-stability is asserted against a FRESH independent
+    ``scan_bundle``+``build_report`` pass — stronger than comparing two
+    cached reads. No _meta inside the envelope.
+    """
+    import time as _time
+
     from skill_lens.cache import FastPathCache
     from skill_lens.context import PluginContextView
+    from skill_lens.jobs import JobManager
     from skill_lens.slash import make_handler
 
     _envelope, bundle = run_vector("C", tmp_path)
 
     view = PluginContextView(FakeCtxForSlash(tmp_path))
-    handler = make_handler(view, FastPathCache())
+    cache = FastPathCache()
+    jobs = JobManager(plugin_data_dir=tmp_path / "jobs", register_exit=False)
+    try:
+        handler = make_handler(view, cache, jobs=jobs)
 
-    first = handler(f"scan {bundle} --json --no-cache")
-    second = handler(f"scan {bundle} --json --no-cache")
-    assert isinstance(first, str) and first.startswith("```json")
-    assert first == second, "--json output must be byte-stable across runs"
-    body = first.removeprefix("```json\n").removesuffix("\n```")
-    assert "_meta" not in body and "generated_at" not in body
+        queued = handler(f"scan {bundle}")
+        assert isinstance(queued, str) and queued.startswith("lens scan queued:")
+
+        deadline = _time.monotonic() + 30
+        while _time.monotonic() < deadline and not jobs.reports_ready():
+            _time.sleep(0.02)
+        assert jobs.reports_ready(), "vector C job must complete on the worker"
+
+        # Fetch first so the ready-banner doesn't precede the JSON fence.
+        handler("report c")
+        first = handler(f"scan {bundle} --json")
+        assert isinstance(first, str) and first.startswith("```json")
+        body = first.removeprefix("```json\n").removesuffix("\n```")
+        assert "_meta" not in body and "generated_at" not in body
+
+        # Independent core pass must reproduce the served bytes EXACTLY.
+        from skill_lens.canonical import canonical_dumps
+        from skill_lens.engines import scan_bundle
+        from skill_lens.report import build_report
+
+        fresh = canonical_dumps(build_report(scan_bundle(bundle)))
+        assert body == fresh, "slash-served envelope must be byte-stable with the core"
+    finally:
+        jobs.shutdown(timeout=5.0)
 
 
 class FakeCtxForSlash:

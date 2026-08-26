@@ -273,6 +273,7 @@ def _chat_body(
 
     finding_lines: list[str] = []
     active = [f for f in envelope.get("findings", ()) if not f.get("suppressed", False)]
+    suppressed_total = sum(1 for f in envelope.get("findings", ()) if f.get("suppressed", False))
     if active:
         finding_lines.append(f"findings: {counts_phrase(envelope)}")
         for finding in worst_findings(envelope, worst_count):
@@ -282,6 +283,13 @@ def _chat_body(
             finding_lines.append(f"… {hidden} more in the full report")
     else:
         finding_lines.append("findings: none")
+    if suppressed_total:
+        # Machine visibility law (PLAN Phase 2 exit): suppressed findings are
+        # never silently dropped — chat shows the count, the JSON record
+        # keeps every suppressed finding with its suppressed_by pointer.
+        finding_lines.append(
+            f"suppressed: {suppressed_total} by policy/baseline (full record in --json)"
+        )
 
     tail_lines = [ADVISOR_LINE]
     name = _display_name(str((envelope.get("target") or {}).get("name", "")))
@@ -366,6 +374,19 @@ def fast_line_skip(*, name: str, last_examined: str) -> str:
     return _clip_fast_line(f"lens skip {name} · unchanged since last exam ({last_examined})")
 
 
+def fast_line_coalesced(*, name: str, hash8: str) -> str:
+    """Format C sibling for an in-flight duplicate trigger (§11.4 ``skip``).
+
+    The watcher's own unchanged-since-last-exam wording stays in
+    :func:`fast_line_skip`; this variant covers the queue coalescing case —
+    a scan for this exact bundle hash is already queued/running, so this
+    trigger folds onto it (same job id, no second scan).
+    """
+    return _clip_fast_line(
+        f"lens skip {name} · scan already in progress ({hash8}) · /lens report {name} when ready"
+    )
+
+
 def fast_line_fail(*, name: str, reason: str) -> str:
     """Format D — engine/orchestrator error; wording matches CLI stderr."""
     reason = " ".join(str(reason).split())
@@ -431,6 +452,7 @@ __all__ = [
     "capability_line",
     "counts_phrase",
     "fast_line_fail",
+    "fast_line_coalesced",
     "fast_line_ok",
     "fast_line_scan_queued",
     "fast_line_skip",

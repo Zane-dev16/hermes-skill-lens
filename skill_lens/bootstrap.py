@@ -38,8 +38,8 @@ def register_plugin(raw_ctx: Any) -> PluginContextView:
     """Store *raw_ctx* behind a defensive view; register ``/lens``; return it.
 
     Command registrations only in this phase — observer hooks are wired in
-    Phase 4, and never a blocking hook. Slash-registration failure logs and
-    degrades to an inert plugin instead of raising into the host.
+    Phase 4, and never a blocking hook. Slash- and CLI-registration failures
+    log and degrade to an inert plugin instead of raising into the host.
     """
     global _active_view
     from . import __version__
@@ -48,6 +48,7 @@ def register_plugin(raw_ctx: Any) -> PluginContextView:
     with _lock:
         _active_view = view
     _register_slash_safely(view)
+    _register_cli_safely(view)
     logger.info(
         "Skill Lens %s registered (advisor mode; zero blocking hooks)",
         __version__,
@@ -63,3 +64,13 @@ def _register_slash_safely(view: PluginContextView) -> None:
         register_slash(view)
     except Exception:
         logger.exception("Skill Lens: /lens registration failed; slash surface inert")
+
+
+def _register_cli_safely(view: PluginContextView) -> None:
+    """Register ``hermes lens``; any failure stays inside (advisor law)."""
+    try:
+        from .cli import register_cli
+
+        register_cli(view)
+    except Exception:
+        logger.exception("Skill Lens: CLI registration failed; CLI surface inert")
