@@ -1,0 +1,4 @@
+# Benign hard case (Phase 3): non-English description (Arabic). Exercises the
+# D-047 multilingual precision fix for LNS-MAN-004 — genuinely concrete
+# capability prose in Arabic must stay silent.
+category = "productivity"

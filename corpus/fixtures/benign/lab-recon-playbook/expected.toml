@@ -1,0 +1,8 @@
+# Benign hard case (Phase 3): declared pentest-lab reference skill.
+# Carries the [lab:declared-offensive] marker + offensive-scope lexicon
+# (pentest / red-team / security testing). SPEC §10/D-STREETLAB: street
+# IGNORES declarations for offensive-tooling rules — this fixture must stay
+# >=B on street by being genuinely inert (docs-only checklists over the
+# RFC 5737 documentation range, no executable offensive primitives), not by
+# earning any discount.
+category = "security"

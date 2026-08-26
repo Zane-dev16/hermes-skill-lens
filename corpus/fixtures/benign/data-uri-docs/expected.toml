@@ -1,0 +1,4 @@
+# Benign hard case (Phase 3): high-entropy-but-benign strings — inline
+# base64 data URIs and long encoded blobs living in PROSE/fence contexts,
+# never assignment/bearer positions (LNS-SEC-002's reporting contexts).
+category = "productivity"

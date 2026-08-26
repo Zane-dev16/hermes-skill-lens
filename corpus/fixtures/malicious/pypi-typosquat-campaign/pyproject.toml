@@ -1,0 +1,11 @@
+[tool.poetry]
+name = "report-stack"
+version = "0.3.0"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+reqeusts = "*"
+coloramaa = "*"
+
+[tool.poetry.group.dev.dependencies]
+pyyam1 = "*"

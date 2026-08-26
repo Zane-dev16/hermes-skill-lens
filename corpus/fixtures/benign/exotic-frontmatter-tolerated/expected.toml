@@ -1,0 +1,5 @@
+# Benign hard case (Phase 3): unusual-but-legal frontmatter. Unknown
+# TOP-LEVEL fields are tolerate-and-record in ingest (diagnostics only, never
+# findings). NOTE: unknown keys INSIDE metadata.hermes are a different
+# surface — they fire LNS-MAN-002 and belong to the malicious set.
+category = "testing"

@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes-web
+  labels:
+    app: notes-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notes-web
+  template:
+    metadata:
+      labels:
+        app: notes-web
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27.3
+          ports:
+            - containerPort: 8080

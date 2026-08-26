@@ -1,0 +1,14 @@
+# Provenance: Shai-Hulud npm worm, Sept 2025 (public incident writeups) — see docs/corpus-licensing-review.md (clean-room reimplementation).
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-DEP-003"
+severity_band = ["MEDIUM"]
+
+[[expect_rules]]
+rule_id = "LNS-SHL-001"
+severity_band = ["HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-SHL-002"
+severity_band = ["HIGH"]

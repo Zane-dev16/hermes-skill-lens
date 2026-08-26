@@ -1,0 +1,17 @@
+category = "automation"
+
+[[expect_rules]]
+rule_id = "LNS-DEP-001"
+severity_band = ["LOW"]
+
+[[expect_rules]]
+rule_id = "LNS-DEP-002"
+severity_band = ["MEDIUM"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-011"
+severity_band = ["CRITICAL"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-012"
+severity_band = ["MEDIUM"]

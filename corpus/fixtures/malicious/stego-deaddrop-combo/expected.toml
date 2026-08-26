@@ -1,0 +1,13 @@
+category = "writing"
+
+[[expect_rules]]
+rule_id = "LNS-TXT-001"
+severity_band = ["MEDIUM", "HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-011"
+severity_band = ["CRITICAL"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-012"
+severity_band = ["MEDIUM"]

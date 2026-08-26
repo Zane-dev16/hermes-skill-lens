@@ -1,0 +1,14 @@
+# Provenance: postmark-mcp MCP backdoor, Sept 2025 (Koi Security public disclosure) — see docs/corpus-licensing-review.md (clean-room reimplementation).
+category = "productivity"
+
+[[expect_rules]]
+rule_id = "LNS-JSS-004"
+severity_band = ["HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-011"
+severity_band = ["CRITICAL"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-012"
+severity_band = ["MEDIUM"]

@@ -1,0 +1,5 @@
+{
+  "default_view": "index",
+  "cache_limit_mb": 32,
+  "sections": ["guides", "api", "faq"]
+}

@@ -1,0 +1,3 @@
+# Benign hard case (Phase 3): fully pinned pyproject-based dependency
+# manifest — every dependency carries an exact pin or an anchored range.
+category = "devtools"

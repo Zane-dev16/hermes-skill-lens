@@ -1,0 +1,18 @@
+# Provenance: Nx build-tool compromise, Aug 2025 (public incident writeups) — see docs/corpus-licensing-review.md (clean-room reimplementation).
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-DEP-003"
+severity_band = ["MEDIUM"]
+
+[[expect_rules]]
+rule_id = "LNS-JSS-004"
+severity_band = ["HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-011"
+severity_band = ["CRITICAL"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-012"
+severity_band = ["MEDIUM"]

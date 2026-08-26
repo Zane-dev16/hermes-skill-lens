@@ -1,0 +1,4 @@
+# Benign hard case (Phase 3): docs-heavy cookbook — long quoted command
+# examples in fenced blocks; exercises the docs/examples surface of the
+# shell scanner while every quoted command stays inert.
+category = "devtools"

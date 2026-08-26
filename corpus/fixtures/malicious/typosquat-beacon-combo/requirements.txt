@@ -1,0 +1,3 @@
+reqeusts>=2.31.0
+click
+python-dateutil==2.9.0

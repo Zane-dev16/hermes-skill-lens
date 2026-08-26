@@ -1,0 +1,10 @@
+# Provenance: event-stream npm compromise, Nov 2018 (public disclosure) — see docs/corpus-licensing-review.md (clean-room reimplementation).
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-JSS-001"
+severity_band = ["HIGH"]
+
+[[expect_rules]]
+rule_id = "LNS-JSS-002"
+severity_band = ["HIGH"]

@@ -1,0 +1,10 @@
+# Provenance: MCP tool-poisoning research (Invariant Labs, Apr 2025, public) — see docs/corpus-licensing-review.md (clean-room reimplementation).
+category = "tools"
+
+[[expect_rules]]
+rule_id = "LNS-TXT-004"
+severity_band = ["MEDIUM"]
+
+[[expect_rules]]
+rule_id = "LNS-TXT-005"
+severity_band = ["MEDIUM"]
