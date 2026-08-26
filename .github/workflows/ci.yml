@@ -21,7 +21,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install ruff pytest pytest-socket hypothesis PyYAML
+          python -m pip install jsonschema rich
       - name: Lint (ruff)
         run: python -m ruff check .
       - name: Tests (pytest)
+        # LENS_SKIP_PERF: perf budgets (tests/perf/test_budgets.py) are gated
+        # on dedicated runners via scripts/perf_check.py --strict; shared CI
+        # runners are too noisy for a 400 ms wall-clock budget.
+        env:
+          LENS_SKIP_PERF: "1"
         run: python -m pytest -q
+      - name: Validate SARIF against official 2.1.0 schema
+        # Explicit schema gate over generated reports (vendored OASIS schema;
+        # tests/test_report_sarif.py remains the exhaustive validator).
+        run: python3 scripts/sarif_check.py

@@ -1,0 +1,38 @@
+Privacy CI — red-on-drift proof (Phase 3 deliverable 3)
+========================================================
+Date: 2026-08-25 · Method: THROWAWAY COPY under /tmp, never the repo.
+
+Procedure (both probes executed against a full copy of the repo at
+/tmp/lens-drift-copy/hermes-skill-lens; copy discarded after capture):
+
+PROBE A — G3 import contract
+  Change : injected `import urllib.request` at module top of
+           skill_lens/render.py inside the throwaway copy only.
+  Result : pytest tests/test_import_contract.py → EXIT 1
+             FAILED test_default_closure_imports_no_network_modules
+                    (pristine-interpreter sys.modules walk caught it)
+             FAILED test_no_static_network_imports_outside_enrich
+                    (static source scan caught it)
+  Both independent G3 proofs went RED on the single-line drift.
+
+PROBE B — G1 socket denial
+  Change : restored render.py from the main repo, then injected
+           `socket.getaddrinfo('localhost', 80)` into scan_bundle
+           (skill_lens/engines/__init__.py) in the copy only.
+  Result : pytest tests/test_osv_enrich.py::test_canned_scan_and_sarif_open_zero_sockets
+           → EXIT 1, pytest_socket.SocketBlockedError:
+             "A test tried to use socket.getaddrinfo."
+
+Cleanup: `rm -rf /tmp/lens-drift-copy` — main repo verified untouched
+(git status clean apart from intended Phase 3 additions).
+
+Wiring (.github/workflows/privacy.yml):
+  - job privacy-g1-g3 runs BOTH suites on every push/PR:
+      pytest tests/test_import_contract.py -q
+      pytest tests/test_osv_enrich.py -q -k "not only_socket_opener"
+    (the live api.osv.dev round-trip test is deselected deliberately:
+    a network round trip certifies nothing about the DEFAULT path and
+    only adds flake; it stays in the main suite, skipping honestly offline.)
+
+Conclusion: privacy.yml is red-on-drift BY CONSTRUCTION for both the
+import-contract guarantee (G3) and the zero-socket guarantee (G1).

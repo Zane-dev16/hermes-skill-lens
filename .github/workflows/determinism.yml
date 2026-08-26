@@ -1,0 +1,97 @@
+---
+name: determinism
+
+on:
+  push:
+  pull_request:
+
+# PLAN §1 Phase 3: "Determinism CI job (byte-compare canonical envelope across
+# two runners / TZ / locale / path prefix; `_meta` excluded)".
+#
+# Two matrix legs scan the ENTIRE corpus with tools/determinism_check.py under
+# deliberately different environments (TZ, locale env, checkout path prefix,
+# PYTHONHASHSEED) and upload their digest manifests as artifacts. A final
+# `compare` job downloads both manifests and requires BYTE equality — any
+# drift fails the job. `_meta` exclusion is enforced inside the envelope
+# contract itself (skill_lens/report.py never embeds it) and re-asserted by
+# the tool (a leaked `_meta` key aborts the leg).
+#
+# NOTE: runners have no tree-sitter grammars installed, so both legs run the
+# golden-tested regex fallback lane — equally on both legs, which is exactly
+# what the cross-leg byte compare certifies (P1.5 fingerprint parity makes
+# lane choice output-stable anyway).
+
+jobs:
+  scan-leg:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: a-tokyo-en_US
+            TZ: "Asia/Tokyo"
+            LANG: "en_US.UTF-8"
+            LC_ALL: "en_US.UTF-8"
+            PYTHONHASHSEED: "0"
+            checkout_path: "."
+          - leg: b-newyork-C
+            TZ: "America/New_York"
+            LANG: "C"
+            LC_ALL: "C"
+            PYTHONHASHSEED: "random"
+            checkout_path: "../checkout-leg-b"
+    name: scan (${{ matrix.leg }})
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ${{ matrix.checkout_path }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install runtime deps
+        # PyYAML for rule packs; grammars intentionally absent (regex lane).
+        run: python -m pip install PyYAML
+      - name: Scan corpus → canonical-envelope digest manifest
+        working-directory: ${{ matrix.checkout_path }}
+        env:
+          TZ: ${{ matrix.TZ }}
+          LANG: ${{ matrix.LANG }}
+          LC_ALL: ${{ matrix.LC_ALL }}
+          PYTHONHASHSEED: ${{ matrix.PYTHONHASHSEED }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          echo "leg ${{ matrix.leg }} · TZ=$TZ · LANG=$LANG"
+          echo "LC_ALL=$LC_ALL · cwd=$(pwd)"
+          python3 tools/determinism_check.py digests-${{ matrix.leg }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.leg }}
+          path: ${{ matrix.checkout_path }}/digests-${{ matrix.leg }}.json
+          retention-days: 7
+
+  compare:
+    needs: scan-leg
+    runs-on: ubuntu-latest
+    name: byte-compare legs
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: legs
+      - name: Require byte-identical canonical envelopes across legs
+        run: |
+          set -euo pipefail
+          ls -R legs
+          A=legs/digests-a-tokyo-en_US/digests-a-tokyo-en_US.json
+          B=legs/digests-b-newyork-C/digests-b-newyork-C.json
+          sha256sum "$A" "$B"
+          if ! cmp -s "$A" "$B"; then
+            echo "::error::canonical-envelope DRIFT between legs"
+            echo "::error::(TZ/locale/path-prefix changed the bytes)"
+            diff <(python3 -m json.tool "$A") \
+              <(python3 -m json.tool "$B") || true
+            exit 1
+          fi
+          COUNT=$(python3 -c \
+            "import json;print(json.load(open('$A'))['fixtures'])")
+          echo "OK: $COUNT fixtures byte-identical across legs"

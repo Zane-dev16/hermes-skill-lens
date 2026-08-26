@@ -1,0 +1,46 @@
+---
+name: privacy
+
+on:
+  push:
+  pull_request:
+
+# PLAN §1 Phase 3: "Privacy enforcement CI: pytest-socket canned-scan tests
+# asserting zero sockets (G1) plus an import-contract test asserting skill_lens
+# imports no network modules in the default closure (G3 restated)".
+#
+# RED-ON-DRIFT BY CONSTRUCTION (proven 2026-08-25, evidence in
+# build-state/privacy-ci-proof.txt): in throwaway copies under /tmp,
+# (a) adding `import urllib.request` inside skill_lens/render.py fails BOTH
+# import-contract proofs (static source scan + pristine-subprocess closure),
+# and (b) adding a socket.getaddrinfo call inside scan_bundle makes the
+# pytest-socket canned-scan test error. Both copies were discarded after the
+# demonstration; these jobs fail the moment either guarantee regresses.
+#
+# The live-network OSV opt-in test is DESELECTED here deliberately: this job
+# certifies the DEFAULT path is socket-free; a passing network round-trip
+# says nothing about that and only adds flake surface. It remains in the
+# main suite (skips honestly offline).
+
+jobs:
+  privacy-g1-g3:
+    runs-on: ubuntu-latest
+    name: G1 socket-deny + G3 import-contract
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install test tooling
+        run: |
+          python -m pip install pytest pytest-socket hypothesis PyYAML
+      - name: G3 — default closure imports no network modules
+        run: python -m pytest tests/test_import_contract.py -q
+      - name: G1 — canned scans open zero sockets (pytest-socket)
+        # Deselect: the live api.osv.dev round trip certifies nothing about
+        # the DEFAULT path and only adds network flake to this job.
+        run: >
+          python -m pytest tests/test_osv_enrich.py -q
+          -k "not only_socket_opener"
+      - name: Privacy guarantees green
+        run: echo "G1+G3 enforced — default path socket-free"
