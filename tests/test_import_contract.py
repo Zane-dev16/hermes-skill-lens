@@ -151,3 +151,152 @@ def test_enrich_osv_imported_only_on_flagged_codepath(monkeypatch) -> None:  # n
     assert enriched["enrichment"]["status"] == "ok"
     # Module now cached in sys.modules; the hook fired only until first load.
     assert "skill_lens.enrich.osv" in finder.requests
+
+
+# ---------------------------------------------------------------------------
+# D-053 layout law: host-plugin load must not depend on a top-level
+# ``skill_lens`` import name. The Hermes host imports this plugin directory
+# as ``hermes_plugins.<key>`` (PluginManager._load_directory_module), where
+# ``skill_lens/`` is NOT importable from sys.path. Every intra-package
+# import is therefore RELATIVE; these tests pin that contract from both
+# sides (static source scan + live host-style subprocess load).
+# ---------------------------------------------------------------------------
+
+_ABSOLUTE_INTRA_PACKAGE_IMPORT = re.compile(
+    r"^\s*(?:from\s+skill_lens(?:\.\w+)*\s+import\b|import\s+skill_lens(?:\.\w+)*)",
+    re.MULTILINE,
+)
+
+
+def test_no_absolute_intra_package_imports() -> None:
+    """D-053: skill_lens/** must use relative intra-package imports only.
+
+    An absolute ``from skill_lens.x import ...`` works only while repo root
+    sits on sys.path (pytest) and raises ModuleNotFoundError under the
+    host's ``hermes_plugins.<key>`` load — the Phase-4 integration blocker.
+    Docstring/prose mentions of the public package name are fine; only
+    actual import statements are banned.
+    """
+    offenders: list[str] = []
+    for source in sorted((REPO_ROOT / "skill_lens").rglob("*.py")):
+        rel = source.relative_to(REPO_ROOT).as_posix()
+        for match in _ABSOLUTE_INTRA_PACKAGE_IMPORT.finditer(
+            source.read_text(encoding="utf-8")
+        ):
+            line_no = source.read_text(encoding="utf-8")[: match.start()].count("\n") + 1
+            offenders.append(f"{rel}:{line_no}: {match.group(0).strip()!r}")
+    assert offenders == [], f"absolute intra-package imports: {offenders}"
+
+
+_HOST_LAYOUT_PROBE = """
+import os, sys, tempfile, types, importlib.util
+from pathlib import Path
+
+REPO = Path({root!r})
+os.chdir(tempfile.mkdtemp(prefix="lens-hostlayout-"))
+os.environ["HERMES_HOME"] = os.getcwd()          # hermetic scratch home
+sys.path = [p for p in sys.path if p and Path(p).resolve() != REPO.resolve()]
+
+ns_name = "hermes_plugins"
+ns_pkg = types.ModuleType(ns_name)
+ns_pkg.__path__ = []                              # type: ignore[attr-defined]
+ns_pkg.__package__ = ns_name
+sys.modules[ns_name] = ns_pkg
+
+module_name = ns_name + ".lens_probe"
+spec = importlib.util.spec_from_file_location(
+    module_name, REPO / "__init__.py", submodule_search_locations=[str(REPO)]
+)
+module = importlib.util.module_from_spec(spec)
+module.__package__ = module_name                  # type: ignore[attr-defined]
+module.__path__ = [str(REPO)]                     # type: ignore[attr-defined]
+sys.modules[module_name] = module
+spec.loader.exec_module(module)
+
+class Ctx:
+    # Minimal PluginContext double covering exactly the seams register() uses.
+    def __init__(self, data_root):
+        self.manifest = types.SimpleNamespace(key="lens", name="lens", version="0.9.0a0")
+        self.plugin_id = "lens"
+        self.registered_hooks = []
+        self.commands = {{}}
+        self.cli_commands = {{}}
+        self._settings = {{}}
+        self._data_dir = Path(data_root) / "plugin-data" / "lens"
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+
+    def register_hook(self, hook_name, callback):
+        self.registered_hooks.append(hook_name)
+        return object()
+
+    def register_command(self, name, handler, description="", args_hint=""):
+        self.commands[name] = {{"handler": handler}}
+        return object()
+
+    def register_cli_command(self, name, **kwargs):
+        self.cli_commands[name] = kwargs
+        return object()
+
+    def get_config(self, key, default=None):
+        node = self._settings
+        for segment in key.split("."):
+            if isinstance(node, dict) and segment in node:
+                node = node[segment]
+            else:
+                return default
+        return node
+
+    def set_config(self, key, value):
+        self._settings[key] = value
+
+    @property
+    def state(self):
+        return types.SimpleNamespace(data_dir=self._data_dir)
+
+ctx = Ctx(tempfile.mkdtemp(prefix="lens-hostlayout-data-"))
+module.register(ctx)
+
+assert sorted(ctx.registered_hooks) == [
+    "on_skill_lifecycle", "post_tool_call", "transform_tool_result"
+], ctx.registered_hooks
+assert "lens" in ctx.cli_commands, sorted(ctx.cli_commands)
+
+handler = ctx.commands["lens"]["handler"]
+doctor_out = handler("doctor")
+assert isinstance(doctor_out, str) and doctor_out.strip(), repr(doctor_out)[:200]
+hub_out = handler("hub")
+assert isinstance(hub_out, str) and hub_out.strip(), repr(hub_out)[:200]
+
+# Core pack must resolve through the LOADED tree (importlib.resources via
+# __package__, not a hard-coded top-level name).
+loaded_rules = module.skill_lens.rules
+pack = loaded_rules.load_core_pack()
+assert len(pack.rules) > 0, "core pack empty under host layout"
+
+leaked = [n for n in sys.modules if n == "skill_lens" or n.startswith("skill_lens.")]
+assert not leaked, f"top-level skill_lens leaked into host layout: {{sorted(leaked)[:5]}}"
+print("HOST-LAYOUT-OK")
+"""
+
+
+def test_host_layout_load_end_to_end(tmp_path) -> None:  # noqa: ANN001
+    """D-053: load the plugin EXACTLY like PluginManager does (repo root
+    scrubbed from sys.path) and drive register() → slash verbs → core-pack
+    load end-to-end. Regression for the Phase-4 integration blocker:
+    absolute intra-package imports raised ModuleNotFoundError at slash.py /
+    cli.py / watcher.py under this layout."""
+    import subprocess
+
+    probe = _HOST_LAYOUT_PROBE.format(root=str(REPO_ROOT))
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, (
+        f"host-layout load failed\nstdout: {result.stdout[-2000:]}\n"
+        f"stderr: {result.stderr[-2000:]}"
+    )
+    assert "HOST-LAYOUT-OK" in result.stdout

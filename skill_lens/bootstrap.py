@@ -35,11 +35,13 @@ def reset_context() -> None:
 
 
 def register_plugin(raw_ctx: Any) -> PluginContextView:
-    """Store *raw_ctx* behind a defensive view; register ``/lens``; return it.
+    """Store *raw_ctx* behind a defensive view; register surfaces; return it.
 
-    Command registrations only in this phase — observer hooks are wired in
-    Phase 4, and never a blocking hook. Slash- and CLI-registration failures
-    log and degrade to an inert plugin instead of raising into the host.
+    Phase 4 wiring: ``/lens`` slash, ``hermes lens`` CLI, and the three
+    observer hooks (on_skill_lifecycle / post_tool_call /
+    transform_tool_result — skill_lens.triggers). Still NEVER a blocking
+    hook. Every registration failure logs and degrades to an inert plugin
+    instead of raising into the host.
     """
     global _active_view
     from . import __version__
@@ -49,8 +51,10 @@ def register_plugin(raw_ctx: Any) -> PluginContextView:
         _active_view = view
     _register_slash_safely(view)
     _register_cli_safely(view)
+    _register_hooks_safely(view)
+    _start_watcher_safely(view)
     logger.info(
-        "Skill Lens %s registered (advisor mode; zero blocking hooks)",
+        "Skill Lens %s registered (advisor mode; observer hooks only)",
         __version__,
     )
     return view
@@ -74,3 +78,34 @@ def _register_cli_safely(view: PluginContextView) -> None:
         register_cli(view)
     except Exception:
         logger.exception("Skill Lens: CLI registration failed; CLI surface inert")
+
+
+def _register_hooks_safely(view: PluginContextView) -> None:
+    """Register the three observer hooks; any failure stays inside.
+
+    Only ever passes OBSERVER hook names to :meth:`PluginContextView.register_hook`
+    (``pre_tool_call`` is structurally unreachable from this module — advisor
+    law, SPEC §11.6/T1).
+    """
+    try:
+        from .triggers import register_triggers
+
+        register_triggers(view)
+    except Exception:
+        logger.exception("Skill Lens: trigger registration failed; hooks inert")
+
+
+def _start_watcher_safely(view: PluginContextView) -> None:
+    """Run the §11.8 startup sweep; auto-start polling only when opted in.
+
+    The sweep ALWAYS runs (out-of-band drift must be caught even for users
+    who never enable continuous polling); continuous polling is opt-in via
+    ``/lens watch start`` or the ``watch.poll`` setting. Any failure stays
+    inside this function — the plugin loads inert-but-alive without it.
+    """
+    try:
+        from .watcher import register_watcher
+
+        register_watcher(view)
+    except Exception:
+        logger.exception("Skill Lens: watcher startup failed; drift watch inert")

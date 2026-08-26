@@ -89,8 +89,8 @@ def _emit(text: str, *, plain: bool) -> None:
 
 def build_cli_handler(view: Any, cache: Any) -> Any:
     """Build ``(namespace) -> int`` dispatcher over the shared verb code."""
-    from skill_lens.policy import POLICY_EXIT_CODE, PolicyError, policy_failure_notice
-    from skill_lens.slash import dispatch_verb
+    from .policy import POLICY_EXIT_CODE, PolicyError, policy_failure_notice
+    from .slash import dispatch_verb
 
     def dispatch(namespace: Any) -> int:
         verb = str(getattr(namespace, "lens_verb", "") or "help")
@@ -110,6 +110,11 @@ def build_cli_handler(view: Any, cache: Any) -> Any:
             print(policy_failure_notice(exc), file=sys.stderr)
             return POLICY_EXIT_CODE
         _emit(text, plain=plain)
+        if verb == "doctor":
+            # §11.9 exit policy lives in the report itself: 0 even on
+            # warnings, 2 on any hard check failure. The doctor verb stashes
+            # it in the sink; text-prefix heuristics and --fail-on don't apply.
+            return int(sink.get("doctor_exit", 0))
         if text.startswith(_FAIL_PREFIXES) or _USAGE_MARKER in text.splitlines()[0]:
             return POLICY_EXIT_CODE
         return _fail_on_exit_code(namespace, sink)
@@ -121,7 +126,7 @@ def build_cli_handler(view: Any, cache: Any) -> Any:
             return 0
         envelope = sink.get("envelope") or {}
         verdict = str((envelope.get("score") or {}).get("verdict") or "")
-        from skill_lens.scoring import compute_exit_code
+        from .scoring import compute_exit_code
 
         try:
             return compute_exit_code(verdict, fail_on)
@@ -189,6 +194,21 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
         if right:
             tokens.append(str(right))
         common_flags()
+    elif verb == "doctor":
+        if getattr(namespace, "plain", False):
+            tokens.append("--plain")
+    elif verb == "hub":
+        if getattr(namespace, "plain", False):
+            tokens.append("--plain")
+    elif verb == "watch":
+        action = getattr(namespace, "action", None)
+        if action:
+            tokens.append(str(action))
+        secs = getattr(namespace, "secs", None)
+        if secs:
+            tokens.append(str(secs))
+        if getattr(namespace, "plain", False):
+            tokens.append("--plain")
     return tokens
 
 
@@ -227,6 +247,25 @@ def setup_parser(parser: Any) -> None:
     # so a threshold gate would be meaningless (§8.4 gates VERDICTS).
     p_diff.add_argument("--plain", action="store_true")
 
+    p_doctor = subparsers.add_parser(
+        "doctor", help="§11.9 nine-check self-check (exit 0 on warnings; 2 on hard failures)"
+    )
+    # doctor carries --plain only: it has no verdict envelope to gate.
+    p_doctor.add_argument("--plain", action="store_true")
+
+    p_hub = subparsers.add_parser(
+        "hub", help="review bundles staged in skills/.hub/quarantine (advisory lane)"
+    )
+    # hub carries --plain only: it renders the §11.7 view, no verdict envelope.
+    p_hub.add_argument("--plain", action="store_true")
+
+    p_watch = subparsers.add_parser(
+        "watch", help="out-of-band drift watcher: status (default) | start [secs] | stop"
+    )
+    p_watch.add_argument("action", nargs="?", default="status")
+    p_watch.add_argument("secs", nargs="?", default=None)
+    p_watch.add_argument("--plain", action="store_true")
+
     subparsers.add_parser("help", help="usage block")
 
 
@@ -245,7 +284,7 @@ def register_cli(view: Any, *, cache: Any = None) -> bool:
     host accepted the registration; failures log and return False (advisor
     law — never an exception into the host)."""
     if cache is None:
-        from skill_lens.slash import shared_cache
+        from .slash import shared_cache
 
         cache = shared_cache()
     try:

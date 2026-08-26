@@ -30,7 +30,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from skill_lens.baseline import (
+from .baseline import (
     BaselineRecord,
     baseline_cache_suffix,
     baseline_path_for,
@@ -40,12 +40,12 @@ from skill_lens.baseline import (
     resolve_baseline_entries,
     write_baseline,
 )
-from skill_lens.cache import CacheEntry, FastPathCache, hash8, key_for_ir
-from skill_lens.canonical import canonical_dumps
-from skill_lens.context import PluginContextView
-from skill_lens.engines import ScanDeadlineBreach
-from skill_lens.policy import PolicyError, policy_failure_notice
-from skill_lens.render import (
+from .cache import CacheEntry, FastPathCache, hash8, key_for_ir
+from .canonical import canonical_dumps
+from .context import PluginContextView
+from .engines import ScanDeadlineBreach
+from .policy import PolicyError, policy_failure_notice
+from .render import (
     counts_phrase,
     fast_line_coalesced,
     fast_line_fail,
@@ -53,8 +53,8 @@ from skill_lens.render import (
     fast_line_scan_queued,
     render_chat_compact,
 )
-from skill_lens.report import build_report
-from skill_lens.scoring import FAIL_ON_LEVELS
+from .report import build_report
+from .scoring import FAIL_ON_LEVELS
 
 logger = logging.getLogger("lens")
 
@@ -78,6 +78,14 @@ verbs:
                        effective rule set + provenance; single-rule detail card
   diff <reportA|name> [<reportB|name>]
                        shift-stable fingerprint comparison (new/fixed/persisted)
+  hub                  review bundles staged in skills/.hub/quarantine — role labels
+                       + per-bundle fast-path lines (advisory lane, never blocks)
+  watch [status|start [secs]|stop]
+                       out-of-band drift watcher: sweep-on-start is always on;
+                       start/stop toggle the opt-in continuous poller
+  doctor               nine-check §11.9 self-check: pack, policy, state dirs,
+                       host env, wiring audit (zero blocking hooks), network
+                       isolation, lifecycle, parse, render — verdict line last
   help                 this block
 
 flags (scan): --json · --no-cache · --sarif (SARIF 2.1.0 fence) · --osv or
@@ -119,7 +127,7 @@ def resolve_target(token: str) -> tuple[Path | None, str]:
     skills_root = home / "skills"
     if not skills_root.is_dir():
         return None, token
-    from skill_lens.ingest import discover_bundles
+    from .ingest import discover_bundles
 
     try:
         refs = discover_bundles(home)
@@ -174,7 +182,7 @@ def _baseline_state(
 
 def _scan_raw(target_path: Path) -> Any:
     """Deadline-bounded scan WITHOUT suppression (fingerprint collection)."""
-    from skill_lens.engines import scan_bundle
+    from .engines import scan_bundle
 
     start = time.monotonic()
     return scan_bundle(target_path, deadline=_deadline_from_start(start))
@@ -220,7 +228,7 @@ def run_scan(
     requests or vice versa. Enrichment failures degrade into the summary
     block; they can never fail the scan.
     """
-    from skill_lens.engines import scan_bundle
+    from .engines import scan_bundle
 
     start = time.monotonic()
     deadline = _deadline_from_start(start)
@@ -245,7 +253,7 @@ def run_scan(
         try:
             # LAZY IMPORT (G1/G3): skill_lens.enrich.osv joins the process
             # ONLY on this explicitly flagged path. Never hoist me.
-            from skill_lens.enrich.osv import enrich_envelope
+            from .enrich.osv import enrich_envelope
 
             envelope = enrich_envelope(envelope, root=target_path)
         except Exception:  # noqa: BLE001 — enrichment degrades, never fails a scan
@@ -365,7 +373,7 @@ def _verb_scan(
 
     # Cold path (SPEC §11.5): enqueue on the worker, answer with the fixed
     # format-B one-liner. The reply path never waits on engines.
-    from skill_lens.jobs import ScanContext  # lazy: jobs.py owns the worker seams
+    from .jobs import ScanContext  # lazy: jobs.py owns the worker seams
 
     bundle_hash = key_for_ir(ir)
     decision = jobs.enqueue(
@@ -407,7 +415,7 @@ def _probe_cache(
     envelope dict lands in ``sink["envelope"]`` — the CLI dispatcher's only
     look at the verdict for §18 exit codes (slash lane passes no sink).
     """
-    from skill_lens.ingest import DEFAULT_CEILINGS, load_bundle
+    from .ingest import DEFAULT_CEILINGS, load_bundle
 
     try:
         ir = load_bundle(target_path, ceilings=DEFAULT_CEILINGS)
@@ -430,7 +438,7 @@ def _probe_cache(
     if fmt == "sarif":
         import json as _json
 
-        from skill_lens.report import render_sarif
+        from .report import render_sarif
 
         try:
             envelope = _json.loads(entry.envelope_json)
@@ -488,7 +496,7 @@ def _verb_report(
     if want_sarif and entry.envelope_json:
         import json as _json
 
-        from skill_lens.report import render_sarif
+        from .report import render_sarif
 
         try:
             envelope = _json.loads(entry.envelope_json)
@@ -524,7 +532,7 @@ def _report_without_entry(name: str, *, jobs: Any) -> str:
 
 def _latest_entry(cache: FastPathCache) -> CacheEntry | None:
     """Newest cached entry across the installed tree (deterministic walk)."""
-    from skill_lens.ingest import discover_bundles
+    from .ingest import discover_bundles
 
     try:
         names = {ref.name for ref in discover_bundles(hermes_home())}
@@ -674,7 +682,7 @@ def _verb_baseline(args: list[str], *, view: PluginContextView, cache: FastPathC
         f"lens baseline {display_name} · +{added} new · {len(merged)} stored · "
         f"{suppressed_now} suppressed now · expires {expires_text} · /lens report {display_name}"
     )
-    from skill_lens.render import FAST_LINE_MAX_CHARS
+    from .render import FAST_LINE_MAX_CHARS
 
     return line[: FAST_LINE_MAX_CHARS - 1] + "…" if len(line) >= FAST_LINE_MAX_CHARS else line
 
@@ -710,8 +718,8 @@ def _verb_explain(args: list[str], *, view: PluginContextView) -> str:
     if errors:
         return f"lens fail explain-rules · {errors[0]} · /lens help"
 
-    from skill_lens.policy import load_policy
-    from skill_lens.rules import load_core_pack
+    from .policy import load_policy
+    from .rules import load_core_pack
 
     policy = load_policy(ctx=view, report_date=_today())  # may raise PolicyError
     try:
@@ -721,7 +729,7 @@ def _verb_explain(args: list[str], *, view: PluginContextView) -> str:
         detail = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
         return fast_line_fail(name="explain-rules", reason=f"rule pack unreadable: {detail}")
 
-    from skill_lens.explain import explain_rules
+    from .explain import explain_rules
 
     text, notice = explain_rules(
         pack,
@@ -830,7 +838,7 @@ def _verb_diff(
     if not positional or len(positional) > 2:
         return "usage: /lens diff <reportA|name> [<reportB|name>] — /lens help"
 
-    from skill_lens.diff import diff_reports, render_diff
+    from .diff import diff_reports, render_diff
 
     if len(positional) == 2:
         left, err_a = _load_report_envelope(positional[0], view=view, cache=cache)
@@ -926,7 +934,7 @@ def shared_jobs(view: PluginContextView | None = None) -> Any:
     global _shared_jobs
     with _shared_jobs_lock:
         if _shared_jobs is None:
-            from skill_lens.jobs import JobManager
+            from .jobs import JobManager
 
             if view is not None:
                 data_dir = view.plugin_data_dir()
@@ -947,6 +955,136 @@ def reset_shared_jobs() -> None:
             manager.shutdown(timeout=2.0)
         except Exception:  # noqa: BLE001 — test seam must never raise
             logger.debug("reset_shared_jobs shutdown hiccup", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# hub verb — quarantine staging review (SPEC §11.7; co-flagship #1)
+# ---------------------------------------------------------------------------
+
+
+def _verb_hub(
+    args: list[str],
+    *,
+    view: PluginContextView,
+    cache: FastPathCache,
+    jobs: Any | None,
+) -> str:
+    """Render the quarantine staging view; zero-arg by design (§11.7).
+
+    The whole render is advisor-safe by construction: it enqueues work on
+    the shared worker (never runs engines inline), labels itself advisory,
+    and degrades per-bundle when staged dirs vanish mid-render.
+    """
+    if args:
+        return _usage_line(offender=args[0])
+    from .hubview import render_hub_view
+
+    return render_hub_view(
+        home=hermes_home(),
+        view=view,
+        cache=cache,
+        jobs=jobs,
+    )
+
+
+def _verb_doctor(
+    args: list[str], *, view: PluginContextView, sink: dict[str, Any] | None = None
+) -> str:
+    """§11.9 nine-check self-check; same engine as ``hermes lens doctor``.
+
+    Never raises (the safe-handler wrapper would catch it, but the verb
+    itself must not depend on that). No pull banner — operational surface,
+    like ``watch``. The CLI lane reads the §11.9 exit policy (0 on warnings,
+    2 on hard failures) from ``sink["doctor_exit"]``; the slash lane ignores
+    the sink entirely (D-SURF).
+    """
+    if args:
+        # ``--plain`` rides the CLI lane's _emit (namespace flag), so accept
+        # and ignore it here; any other argument is a usage offense.
+        leftovers = [a for a in args if a != "--plain"]
+        if leftovers:
+            return _usage_line(offender=leftovers[0])
+    from .doctor import render_slash, run_doctor
+
+    report = run_doctor(view)
+    if sink is not None:
+        sink["doctor_exit"] = report.exit_code
+    return render_slash(report)
+
+
+def _verb_watch(args: list[str], *, view: PluginContextView) -> str:
+    """Drift-watcher control: status (default) | start [secs] | stop (§11.8).
+
+    The startup sweep ALWAYS runs at register time regardless of this verb;
+    ``start``/``stop`` govern only the opt-in continuous poller. Everything
+    is advisor-safe: failures degrade to fail-lines, never exceptions.
+    """
+    from .watcher import shared_watcher
+
+    sub = args[0].lower() if args else "status"
+    extra = args[1:]
+    if sub in ("status", "st"):
+        watcher = shared_watcher(view)
+        lines = watcher.status_lines()
+        if len(lines) == 1:
+            return f"```\n{lines[0]}\n```\n"
+        body = "\n".join(lines)
+        return f"```\n{body}\n```\n"
+    if sub == "start":
+        interval: float | None = None
+        if extra:
+            try:
+                interval = float(extra[0])
+            except ValueError:
+                return fast_line_fail(
+                    name="watch",
+                    reason=f"bad interval {extra[0]!r} · usage: /lens watch start [seconds]",
+                )
+            if interval <= 0:
+                return fast_line_fail(name="watch", reason="interval must be > 0 seconds")
+        # A previous explicit stop must not silently win over an explicit start.
+        # RELATIVE import (dual-import law): the verb must mutate the SAME
+        # module-graph singleton the plugin registered against.
+        from .watcher import reset_shared_watcher as _reset
+        from .watcher import shared_watcher as _shared
+
+        _reset()
+        watcher = _shared(view)
+        watcher.safe_sweep()  # refresh state before polling on top of it
+        started = watcher.start_polling(interval)
+        info = watcher.status_dict()
+        mode = "inotify-accelerated" if info["inotify"] else "timed poll"
+        if started:
+            return (
+                f"```\nlens watch · continuous polling started · base {info['base_interval']:.0f}s "
+                f"(2s→30s adaptive backoff) · {mode} · /lens watch status\n```\n"
+            )
+        return fast_line_fail(name="watch", reason="poller already active or spawn failed")
+    if sub == "stop":
+        watcher = shared_watcher(view)
+        stopped = watcher.stop_polling()
+        return (
+            "```\nlens watch · continuous polling stopped (startup sweep still runs "
+            "every session)\n```\n"
+            if stopped
+            else fast_line_fail(name="watch", reason="poller was not running")
+        )
+    if sub in ("help", "-h", "--help"):
+        return _WATCH_USAGE
+    return _usage_line(offender=args[0])
+
+
+_WATCH_USAGE = """```\
+usage: /lens watch [status|start [seconds]|stop]
+
+  status           poller state, tracked-skill count, journalled gaps
+  start [seconds]  opt-in continuous drift polling (adaptive backoff 2s→30s;
+                   default interval 2s; persisted across sessions)
+  stop             halt the poller for this and future sessions (the startup
+                   sweep that catches while-away drift always stays on)
+
+out-of-band changes are caught by the startup sweep even without polling.
+```"""
 
 
 def _first_token(raw_args: str | None) -> str | None:
@@ -997,6 +1135,15 @@ def dispatch_verb(
         result = _verb_explain(args, view=view)
     elif verb == "diff":
         result = _verb_diff(args, view=view, cache=cache, sink=sink)
+    elif verb == "hub":
+        result = _verb_hub(args, view=view, cache=cache, jobs=manager)
+    elif verb == "watch":
+        # Drift-watcher control/status (§11.8): operational surface — the
+        # "N reports ready" pull banner is noise here, so return directly.
+        return _verb_watch(args, view=view)
+    elif verb == "doctor":
+        # §11.9 nine-check engine: operational surface — no pull banner.
+        return _verb_doctor(args, view=view, sink=sink)
     else:
         return _usage_line(offender=verb)
     banner = manager.banner_line()
@@ -1041,7 +1188,7 @@ def register_slash(
     """
     owned_cache = cache if cache is not None else shared_cache()
     description = "Skill Lens — deterministic security reports for skill bundles (advisory)"
-    args_hint = "scan|report|baseline|explain-rules|diff|help · flags: --json --no-cache"
+    args_hint = "scan|report|baseline|explain-rules|diff|hub|watch|help · flags: --json --no-cache"
     handle = make_handler(view, owned_cache)
     registration = view.register_command(
         SLASH_COMMAND,
