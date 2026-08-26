@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from skill_lens.engines import scan_bundle
 from skill_lens.engines.e6_netgraph import (
@@ -253,3 +255,62 @@ def test_net013_drainer_brand_impersonation_fires(pack, tmp_path) -> None:
     fired = _rule_findings(scan_bundle(bundle, pack), "LNS-NET-013")
     assert len(fired) == 1
     assert "wallet-drainer" in fired[0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# url_hostname — vendored pure-string parser ≡ urllib.parse (G1/G3 closure)
+# ---------------------------------------------------------------------------
+
+
+def test_url_hostname_matches_urllib_parse_on_spot_cases() -> None:
+    """Spot equivalence with the stdlib semantics we replaced (D-045).
+
+    The hypothesis sweep below covers generated shapes; these pin the
+    documented edge cases explicitly so a regression names its cause.
+    """
+    from urllib.parse import urlparse
+
+    from skill_lens.engines.e6_netgraph import url_hostname
+
+    cases = [
+        "https://EXAMPLE.com:8443/path?x=1",
+        "http://user:pass@Host.example./a@b",
+        "https://[::1]:8080/x",
+        "https://[2001:db8::1]/",
+        "ftp://h:8080",
+        "ws://exa_mple.com:/y",
+        "https://host/",
+        "https://host",
+        "wss://sub.EXAMPLE.io#f",
+        "https://:8080/x",
+        "https://user@host",
+        "http://h/i@j",
+        "https://h..st.",
+    ]
+    for url in cases:
+        assert url_hostname(url) == (urlparse(url).hostname or "").lower(), url
+
+
+@given(st.text(alphabet="abc123.:@[]/?#/", min_size=0, max_size=40))
+def test_url_hostname_property_equivalence_within_url_charset(candidate: str) -> None:
+    """Hypothesis: for any string over URL-authority characters, the vendored
+    extractor agrees with urlparse().hostname whenever _URL_RE would even
+    match (scheme'd literals). Non-matching strings are skipped — engines
+    only ever feed it regex-extracted literals."""
+    from urllib.parse import urlparse
+
+    from skill_lens.engines.e6_netgraph import _TRAILING_JUNK, _URL_RE, url_hostname
+
+    url = f"https://{candidate}"
+    if not _URL_RE.search(url):
+        return
+    trimmed = url.rstrip(_TRAILING_JUNK)
+    try:
+        expected = (urlparse(trimmed).hostname or "").lower()
+    except ValueError:
+        # Old behavior: urlparse raising meant "skip this literal" — i.e.
+        # no pair extracted. The vendored parser expresses that as "".
+        expected = ""
+        assert url_hostname(trimmed) == expected, trimmed
+        return
+    assert url_hostname(trimmed) == expected, trimmed

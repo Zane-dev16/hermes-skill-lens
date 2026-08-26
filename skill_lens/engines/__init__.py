@@ -20,7 +20,7 @@ resolve exactly.
 Shipped today: E1 manifest, E2 textinject (pure-Python Unicode/ghost-stream
 scanner — grammar-free, so its degraded mode IS the primary mode), E3
 shellscan, E4 pyscan + E5 jsscan (AST + golden-tested line-scanner fallback),
-E6 netgraph, E7 secretscan (E8 lands in a later Phase-1.5+ implementer).
+E6 netgraph, E7 secretscan, and E8 depintel — all eight §4 engines.
 """
 
 from __future__ import annotations
@@ -64,6 +64,9 @@ from skill_lens.engines.e6_netgraph import NetgraphEngine
 from skill_lens.engines.e7_secretscan import ENGINE_NAME as SECRETSCAN_ENGINE_NAME
 from skill_lens.engines.e7_secretscan import RULE_IDS as SECRETSCAN_RULE_IDS
 from skill_lens.engines.e7_secretscan import SecretScanEngine
+from skill_lens.engines.e8_depintel import ENGINE_NAME as DEPINTEL_ENGINE_NAME
+from skill_lens.engines.e8_depintel import RULE_IDS as DEPINTEL_RULE_IDS
+from skill_lens.engines.e8_depintel import DepIntelEngine
 from skill_lens.ingest import (
     DEFAULT_CEILINGS,
     Ceilings,
@@ -148,6 +151,10 @@ def _jsscan_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector) 
     return _dispatch_one(JsScanEngine(rules), ir, diagnostics, slot_name=JSSCAN_ENGINE_NAME)
 
 
+def _depintel_entry(ir: SkillIR, rules: tuple, diagnostics: DiagnosticsCollector) -> list[dict]:
+    return _dispatch_one(DepIntelEngine(rules), ir, diagnostics, slot_name=DEPINTEL_ENGINE_NAME)
+
+
 def _dispatch_one(
     engine: Any,
     ir: SkillIR,
@@ -171,6 +178,7 @@ REGISTRY: dict[str, Any] = {
     SHELLSCAN_ENGINE_NAME: _shellscan_entry,
     JSSCAN_ENGINE_NAME: _jsscan_entry,
     TEXTINJECT_ENGINE_NAME: _textinject_entry,
+    DEPINTEL_ENGINE_NAME: _depintel_entry,
 }
 
 #: Engine name -> (implementation class, implemented rule ids).
@@ -182,6 +190,7 @@ ENGINE_IMPLEMENTATIONS: dict[str, tuple[type, frozenset[str]]] = {
     SHELLSCAN_ENGINE_NAME: (ShellScanEngine, frozenset(SHELLSCAN_RULE_IDS)),
     JSSCAN_ENGINE_NAME: (JsScanEngine, frozenset(JSSCAN_RULE_IDS)),
     TEXTINJECT_ENGINE_NAME: (TextInjectEngine, frozenset(TEXTINJECT_RULE_IDS)),
+    DEPINTEL_ENGINE_NAME: (DepIntelEngine, frozenset(DEPINTEL_RULE_IDS)),
 }
 
 

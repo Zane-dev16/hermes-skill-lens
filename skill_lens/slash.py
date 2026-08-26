@@ -20,6 +20,7 @@ Advisor contract for this module:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -53,6 +54,7 @@ from skill_lens.render import (
     render_chat_compact,
 )
 from skill_lens.report import build_report
+from skill_lens.scoring import FAIL_ON_LEVELS
 
 logger = logging.getLogger("lens")
 
@@ -78,7 +80,11 @@ verbs:
                        shift-stable fingerprint comparison (new/fixed/persisted)
   help                 this block
 
-flags (scan): --json · --no-cache
+flags (scan): --json · --no-cache · --sarif (SARIF 2.1.0 fence) · --osv or
+osv:true (OPT-IN network enrichment via OSV.dev; findings tagged enriched) ·
+--fail-on clean|notice|warn|alert (CLI exit-code gate; §8.4/§18) ·
+--plain (ASCII headers, box drawing stripped)
+also: report --fail-on/--plain · diff --plain
 
 advisor only — lens never blocks installs. clean scan ≠ safe skill.\
 ```"""
@@ -192,6 +198,7 @@ def run_scan(
     baseline_records: tuple[BaselineRecord, ...] = (),
     key_suffix: str = "",
     report_date: date | None = None,
+    osv: bool = False,
 ) -> dict[str, Any]:
     """One full pipeline pass; returns render inputs, never raises.
 
@@ -206,6 +213,12 @@ def run_scan(
     answers rendered under a different one; empty suffix keeps historical
     keys byte-identical. Baselines apply AFTER dedup BEFORE scoring inside
     :func:`build_report` (DECISIONS D-042 ordering row).
+
+    *osv* is the SPEC §14 G2 opt-in lane: True lazy-imports
+    :mod:`skill_lens.enrich.osv` (the default closure NEVER imports it) and
+    appends ":osv" to the cache key so enriched answers never serve plain
+    requests or vice versa. Enrichment failures degrade into the summary
+    block; they can never fail the scan.
     """
     from skill_lens.engines import scan_bundle
 
@@ -214,7 +227,8 @@ def run_scan(
 
     result = scan_bundle(target_path, deadline=deadline)
     ir = result.ir
-    key = key_for_ir(ir) + key_suffix
+    effective_suffix = key_suffix + (":osv" if osv else "")
+    key = key_for_ir(ir) + effective_suffix
     cached = cache.get(key)
     if cached is not None and cached.envelope_json is not None and cached.compact_text:
         return {
@@ -227,6 +241,21 @@ def run_scan(
         }
 
     envelope = build_report(result, baseline_entries=baseline_records, report_date=report_date)
+    if osv:
+        try:
+            # LAZY IMPORT (G1/G3): skill_lens.enrich.osv joins the process
+            # ONLY on this explicitly flagged path. Never hoist me.
+            from skill_lens.enrich.osv import enrich_envelope
+
+            envelope = enrich_envelope(envelope, root=target_path)
+        except Exception:  # noqa: BLE001 — enrichment degrades, never fails a scan
+            envelope = dict(envelope)
+            envelope["enrichment"] = {
+                "provider": "api.osv.dev",
+                "opt_in": "--osv",
+                "status": "error",
+                "reason": "enrichment adapter failed; offline report served",
+            }
     compact = render_chat_compact(envelope, plugin_data_dir=plugin_data_dir)
     envelope_text = canonical_dumps(envelope)
     score = envelope.get("score") or {}
@@ -263,13 +292,33 @@ def _verb_scan(
     view: PluginContextView,
     cache: FastPathCache,
     jobs: Any,
+    sink: dict[str, Any] | None = None,
 ) -> str:
-    want_json = "--json" in args
-    positional = [a for a in args if not a.startswith("--")]
-    no_cache = "--no-cache" in args
-    unknown_flags = [a for a in args if a.startswith("--") and a not in ("--json", "--no-cache")]
+    # --fail-on is the §8.4 CI contract: CLI-only exit-code semantics, but the
+    # flag parses HERE so both surfaces share one grammar (§11.2). The slash
+    # lane has no exit channel (D-SURF) — the verdict already travels in the
+    # rendered text — so there it is accepted-and-inert; the CLI dispatcher
+    # reads sink["envelope"] and projects the code via scoring.compute_exit_code.
+    rest, fail_on, fail_errors = _split_flag(args, "--fail-on")
+    if fail_errors:
+        return f"lens fail scan · {fail_errors[0]}"
+    want_json = "--json" in rest
+    want_sarif = "--sarif" in rest
+    # SPEC §4 E8 / §14 G2: OSV.dev enrichment is opt-in ONLY. Both token
+    # spellings are honored: CLI-style ``--osv`` and the slash-native
+    # ``osv:true`` (a bare ``osv:true`` is a flag VALUE token, not positional).
+    osv = "--osv" in rest or "osv:true" in rest
+    known_flags = ("--json", "--no-cache", "--sarif", "--osv", "--fail-on", "--plain")
+    positional = [a for a in rest if not a.startswith("--") and a != "osv:true"]
+    no_cache = "--no-cache" in rest
+    unknown_flags = [a for a in rest if a.startswith("--") and a not in known_flags]
     if unknown_flags:
         return _usage_line(offender=unknown_flags[0])
+    if fail_on is not None and fail_on.strip().lower() not in FAIL_ON_LEVELS:
+        return (
+            f"lens fail scan · unknown --fail-on level {fail_on!r} "
+            f"(expected one of: {', '.join(FAIL_ON_LEVELS)})"
+        )
     if not positional:
         return _usage_line(missing="target")
 
@@ -286,13 +335,33 @@ def _verb_scan(
 
     # Fast path first: ingest + hash is cheap and runs inline (<200 ms
     # contract, PLAN Phase 1); a live cache entry answers WITHOUT engines.
+    fmt = "sarif" if want_sarif else ("json" if want_json else "text")
     ir, hit_text = _probe_cache(
-        target_path, cache=cache, want_json=want_json, key_suffix=key_suffix, skip=no_cache
+        target_path,
+        cache=cache,
+        fmt=fmt,
+        key_suffix=key_suffix + (":osv" if osv else ""),
+        skip=no_cache,
+        sink=sink,
     )
     if hit_text is not None:
         return hit_text
     if ir is None:  # load_bundle contract says never; keep a sober D-line anyway
         return fast_line_fail(name=display_name, reason=f"unreadable target: {positional[0]}")
+
+    # --fail-on arm (§8.4): a threshold verdict must exist BEFORE the process
+    # exits, so this arm runs the pipeline INLINE instead of enqueueing.
+    # Rationale: §11.5's queue-first rule protects an ongoing reply path; a
+    # one-shot CI invocation has none — the process ends at the exit code —
+    # so nothing can wedge. Without --fail-on the queue-first contract below
+    # is untouched (advisor stance always exits 0).
+    if fail_on is not None:
+        envelope = _fresh_envelope(view=view, cache=cache, target_path=target_path)
+        if envelope is None:
+            return fast_line_fail(name=display_name, reason="inline scan failed — see logs")
+        if sink is not None:
+            sink["envelope"] = envelope
+        return render_chat_compact(envelope, plugin_data_dir=view.plugin_data_dir())
 
     # Cold path (SPEC §11.5): enqueue on the worker, answer with the fixed
     # format-B one-liner. The reply path never waits on engines.
@@ -303,13 +372,14 @@ def _verb_scan(
         name=display_name,
         target=target_path,
         bundle_hash=bundle_hash,
-        cache_key=bundle_hash + key_suffix,
+        cache_key=bundle_hash + key_suffix + (":osv" if osv else ""),
         context=ScanContext(
             baseline_records=baseline_records,
             key_suffix=key_suffix,
             report_date=_today(),
             plugin_data_dir=plugin_data_dir,
             cache=cache,
+            osv=osv,
         ),
     )
     if decision.coalesced:
@@ -321,16 +391,21 @@ def _probe_cache(
     target_path: Path,
     *,
     cache: FastPathCache,
-    want_json: bool,
+    fmt: str = "text",
     key_suffix: str = "",
     skip: bool = False,
+    sink: dict[str, Any] | None = None,
 ) -> tuple[Any, str | None]:
     """Ingest once, then answer from the cache when bytes are unchanged.
 
     Returns ``(ir, hit_text)`` — *ir* feeds the enqueue hash on a miss;
-    *hit_text* is the served artifact (canonical JSON fence for ``--json``,
-    collapsed compact render otherwise) or None. *skip* (--no-cache) skips
-    the lookup but still returns the IR so the scan can queue.
+    *hit_text* is the served artifact or None. *fmt* picks the artifact:
+    ``text`` (compact render), ``json`` (canonical envelope fence), or
+    ``sarif`` (SARIF 2.1.0 fence rendered from the stored envelope).
+    *skip* (--no-cache) skips the lookup but still returns the IR so the
+    scan can queue. When *sink* is given and a live entry is hit, its parsed
+    envelope dict lands in ``sink["envelope"]`` — the CLI dispatcher's only
+    look at the verdict for §18 exit codes (slash lane passes no sink).
     """
     from skill_lens.ingest import DEFAULT_CEILINGS, load_bundle
 
@@ -343,13 +418,54 @@ def _probe_cache(
     entry = cache.get(key_for_ir(ir) + key_suffix)
     if entry is None or entry.envelope_json is None or entry.compact_text is None:
         return ir, None
-    if want_json:
+    if sink is not None and entry.envelope_json:
+        try:
+            data = json.loads(entry.envelope_json)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            sink["envelope"] = data
+    if fmt == "json":
         return ir, f"```json\n{entry.envelope_json}\n```"
+    if fmt == "sarif":
+        import json as _json
+
+        from skill_lens.report import render_sarif
+
+        try:
+            envelope = _json.loads(entry.envelope_json)
+        except ValueError:
+            return ir, None
+        sarif_text = canonical_dumps(render_sarif(envelope))
+        return ir, f"```json\n{sarif_text}\n```"
     return ir, entry.compact_text
 
 
-def _verb_report(args: list[str], *, cache: FastPathCache, jobs: Any = None) -> str:
-    positional = [a for a in args if not a.startswith("--")]
+def _verb_report(
+    args: list[str],
+    *,
+    cache: FastPathCache,
+    jobs: Any = None,
+    sink: dict[str, Any] | None = None,
+) -> str:
+    # --fail-on/--plain parse here so CLI and slash share one grammar; on the
+    # slash lane --fail-on is inert (D-SURF: verdict travels in text) and
+    # --plain is a no-op (chat renders are already ANSI/box-free).
+    rest, fail_on, fail_errors = _split_flag(args, "--fail-on")
+    if fail_errors:
+        return f"lens fail report · {fail_errors[0]}"
+    if fail_on is not None and fail_on.strip().lower() not in FAIL_ON_LEVELS:
+        return (
+            f"lens fail report · unknown --fail-on level {fail_on!r} "
+            f"(expected one of: {', '.join(FAIL_ON_LEVELS)})"
+        )
+    positional = [a for a in rest if not a.startswith("--")]
+    known = ("--sarif", "--json", "--fail-on", "--plain")
+    unknown_flags = [a for a in rest if a.startswith("--") and a not in known]
+    if unknown_flags:
+        return _usage_line(offender=unknown_flags[0])
+    want_sarif = "--sarif" in args
+    want_json = "--json" in args
     name = positional[0] if positional else None
     entry: CacheEntry | None = None
     if name is not None:
@@ -362,6 +478,25 @@ def _verb_report(args: list[str], *, cache: FastPathCache, jobs: Any = None) -> 
             return "no lens reports cached yet — run `/lens scan <name|path>` first"
     if jobs is not None:
         jobs.mark_fetched(entry.name)  # pull clears the ready banner (§11.5)
+    if sink is not None and entry.envelope_json and fail_on is not None:
+        try:
+            data = json.loads(entry.envelope_json)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            sink["envelope"] = data
+    if want_sarif and entry.envelope_json:
+        import json as _json
+
+        from skill_lens.report import render_sarif
+
+        try:
+            envelope = _json.loads(entry.envelope_json)
+        except ValueError:
+            return f"lens fail report · cached envelope unparsable for {entry.name!r}"
+        return f"```json\n{canonical_dumps(render_sarif(envelope))}\n```"
+    if want_json and entry.envelope_json:
+        return f"```json\n{entry.envelope_json}\n```"
     if entry.compact_text:
         return entry.compact_text
     return fast_line_ok(
@@ -673,14 +808,23 @@ def _fresh_envelope(
     return data if isinstance(data, dict) else None
 
 
-def _verb_diff(args: list[str], *, view: PluginContextView, cache: FastPathCache) -> str:
+def _verb_diff(
+    args: list[str],
+    *,
+    view: PluginContextView,
+    cache: FastPathCache,
+    sink: dict[str, Any] | None = None,  # noqa: ARG001 — grammar parity with scan/report
+) -> str:
     """``/lens diff <reportA|name> [<reportB|name>]`` (§11.2).
 
     Two sources compare directly; ONE name diffs its latest cached report
     against a FRESH scan of that target (the §11.2 "vs installed tree" arm).
+    ``--plain`` is accepted for CLI/slash grammar parity and ignored: diff
+    renders are already ANSI/box-free.
     """
     positional = [a for a in args if not a.startswith("--")]
-    unknown_flags = [a for a in args if a.startswith("--")]
+    known = ("--plain",)
+    unknown_flags = [a for a in args if a.startswith("--") and a not in known]
     if unknown_flags:
         return _usage_line(offender=unknown_flags[0])
     if not positional or len(positional) > 2:
@@ -816,12 +960,18 @@ def dispatch_verb(
     view: PluginContextView,
     cache: FastPathCache,
     jobs: Any | None = None,
+    sink: dict[str, Any] | None = None,
 ) -> str:
     """Route one raw verb invocation. RAISES :class:`PolicyError`.
 
     The shared routing table for BOTH surfaces (§11.2 verbs shared by CLI
     and slash). Callers pick the error lane: the slash safe-handler renders
     the one-line notice; the CLI dispatcher maps to §18 exit codes.
+
+    *sink* is the CLI lane's one-way side channel: when given, verdict-bearing
+    verbs stash the envelope dict behind ``sink["envelope"]`` so the dispatcher
+    can project ``--fail-on`` onto §18 exit codes without re-scanning or
+    text-parsing. The slash lane passes nothing (D-SURF — no exit channel).
 
     Pull banner (§11.5): ready-but-unfetched reports prepend a one-line
     ``N reports ready`` notice on every invocation except ``help`` and the
@@ -838,15 +988,15 @@ def dispatch_verb(
     if verb in ("help", "-h", "--help"):
         return _USAGE
     if verb == "scan":
-        result = _verb_scan(args, view=view, cache=cache, jobs=manager)
+        result = _verb_scan(args, view=view, cache=cache, jobs=manager, sink=sink)
     elif verb == "report":
-        return _verb_report(args, cache=cache, jobs=manager)
+        return _verb_report(args, cache=cache, jobs=manager, sink=sink)
     elif verb == "baseline":
         result = _verb_baseline(args, view=view, cache=cache)
     elif verb in ("explain-rules", "explain"):
         result = _verb_explain(args, view=view)
     elif verb == "diff":
-        result = _verb_diff(args, view=view, cache=cache)
+        result = _verb_diff(args, view=view, cache=cache, sink=sink)
     else:
         return _usage_line(offender=verb)
     banner = manager.banner_line()

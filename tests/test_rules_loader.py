@@ -75,8 +75,8 @@ def write_pack(tmp_path: Path, *rule_texts: str, pack_yaml: str | None = None) -
 def test_core_pack_loads_offline_with_expected_shape() -> None:
     pack = load_core_pack()
     assert pack.name == "core"
-    assert pack.version == "2026.08.5"  # YYYY.MM.N semver (SPEC §15); patch bump = new rule
-    assert len(pack.rules) >= 37  # 17 Phase-1 + 8 E4 + 8 E5 + 5 E2 rules (D-037)
+    assert pack.version == "2026.08.6"  # YYYY.MM.N semver (SPEC §15); patch bump = new rule
+    assert len(pack.rules) >= 40  # 17 Phase-1 + 8 E4 + 8 E5 + 5 E2 + 3 E8 rules (D-045)
     ids = [rule.id for rule in pack.rules]
     assert ids == sorted(ids), "rules must be id-sorted"
     assert len(set(ids)) == len(ids), "duplicate ids in shipped pack"
@@ -89,6 +89,7 @@ def test_core_pack_loads_offline_with_expected_shape() -> None:
             "jsscan",
             "netgraph",
             "secretscan",
+            "depintel",
         }, f"{rule.id} bound to engine outside shipped set"
         assert rule.status == "active"
         assert rule.fixtures_positive and rule.fixtures_negative

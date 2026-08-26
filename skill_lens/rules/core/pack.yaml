@@ -13,17 +13,37 @@
 #               deferred to the source→sink taint phase so credentials.read
 #               evidence can be correlated, not merely present.
 name: core
-version: "2026.08.5"
+version: "2026.08.6"
 spec_version: rule-pack/1
 description: >-
-  Core detection pack v0.1 for Hermes Skill Lens: thirty-seven rules across
-  the seven Phase-1/1.5 engines (E1 manifest, E2 textinject, E3 shellscan,
-  E4 pyscan, E5 jsscan, E6 netgraph, E7 secretscan) plus the claims-stage
-  vague-description rule, selected from the SPEC §17 Hermes-precedent threat
-  matrix. Every rule ships with >=1 true-positive golden fixture and >=1
-  benign lookalike negative fixture under corpus/fixtures/.
+  Core detection pack v0.1 for Hermes Skill Lens: forty rules across the
+  eight Phase-1/1.5 engines (E1 manifest, E2 textinject, E3 shellscan, E4
+  pyscan, E5 jsscan, E6 netgraph, E7 secretscan, E8 depintel) plus the
+  claims-stage vague-description rule, selected from the SPEC §17
+  Hermes-precedent threat matrix. Every rule ships with >=1 true-positive
+  golden fixture and >=1 benign lookalike negative fixture under
+  corpus/fixtures/.
 rules_dir: rules
 changelog:
+  - version: "2026.08.6"
+    date: "2026-08-25"
+    notes:
+      - "Add engine E8 depintel (SPEC §4 row E8 / §17 R8 supply-chain):"
+      - "LNS-DEP-001 unpinned-dependency note LOW static (requirements*/"
+      - "pyproject.toml incl. Poetry table, package.json dep fields; a spec"
+      - "with no version digits and no direct reference floats), LNS-DEP-002"
+      - "offline typosquat heuristic MED regex-band 0.72 (bundled top-package"
+      - "allowlists; homoglyph via E2 TR39 skeleton D-037, leet collapse,"
+      - "Damerau-Levenshtein <=2 near-miss; allowlist members and <4-char"
+      - "names exempt), LNS-DEP-003 npm install lifecycle hooks MED dynamic"
+      - "(preinstall/install/postinstall execute at install time — D-036"
+      - "deferred exactly this here; download-and-execute body refines"
+      - "confidence 0.90→0.97, never severity). Capability ontology gains"
+      - "supply-chain family (§9.1 growth). Fixtures: malicious typosquat-deps"
+      - "x3 rules + benign pinned-deps-helper lookalike. --osv OSV.dev"
+      - "enrichment ships as LAZY-imported skill_lens.enrich.osv outside the"
+      - "default closure (SPEC §14 G1/G2/G3); findings carry additive detail"
+      - "package refs for enrichment/SARIF mapping."
   - version: "2026.08.5"
     date: "2026-08-25"
     notes:

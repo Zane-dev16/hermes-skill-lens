@@ -92,6 +92,10 @@ class ScanContext:
     report_date: date | None = None
     plugin_data_dir: Path | None = None
     cache: Any | None = None  # FastPathCache; typed loose to avoid import cycle
+    #: Opt-in OSV.dev enrichment (SPEC §14 G2). False keeps the default
+    #: network-free path byte-identical; True lazy-imports skill_lens.enrich.osv
+    #: inside run_scan and splits the fast-path cache key (":osv" suffix).
+    osv: bool = False
 
 
 @dataclass
@@ -204,6 +208,7 @@ def pipeline_runner(job: JobRecord) -> None:
         baseline_records=context.baseline_records,
         key_suffix=context.key_suffix,
         report_date=context.report_date,
+        osv=getattr(context, "osv", False),
     )
     if not outcome.get("ok"):
         raise ScanFailure(_one_line(str(outcome.get("error") or "scan failed")))

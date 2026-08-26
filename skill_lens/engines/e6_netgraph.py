@@ -37,10 +37,10 @@ No sockets, no wall-clock, no execution of bundle content.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from functools import lru_cache
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 from skill_lens.claims import finding_fingerprint, is_declared
 from skill_lens.engines.base import (
@@ -270,6 +270,53 @@ def classify_host(host: str) -> tuple[str, ...]:
     return tuple(sorted(classes))
 
 
+def url_hostname(url: str) -> str:
+    """Hostname of a SCHEME'D URL literal — pure string parsing, no urllib.
+
+    Privacy law G1/G3 keeps the default import closure free of network
+    modules; ``urllib.parse`` was the lone exception (parser-only, zero I/O,
+    but still an import-graph liability). This vendored extractor mirrors
+    ``urlparse(url).hostname`` for every shape :data:`_URL_RE` can produce
+    (scheme required, single authority): lowercased, userinfo-stripped,
+    port-stripped, IPv6 brackets removed, trailing dots preserved.
+    Equivalence with urllib is property-tested (tests/test_engine_netgraph)
+    so behavior can never silently drift from the stdlib semantics.
+    """
+    _, sep, rest = url.partition("://")
+    if not sep:
+        return ""
+    for separator in ("/", "?", "#"):
+        cut = rest.find(separator)
+        if cut != -1:
+            rest = rest[:cut]
+    if "[" in rest or "]" in rest:
+        # Bracket discipline mirrors urllib's "Invalid IPv6 URL" ValueError
+        # (old code SKIPPED those literals): brackets are legal ONLY as a
+        # leading [ip-literal] (optionally :port, optionally after userinfo)
+        # whose content parses as an actual IP address; every other bracket
+        # shape yields "" so extract_url_hosts skips the pair identically.
+        if rest.count("[") != rest.count("]"):
+            return ""
+        _, _, hostpart = rest.rpartition("@")
+        end = hostpart.find("]")
+        if not hostpart.startswith("[") or end == -1:
+            return ""
+        tail = hostpart[end + 1 :]
+        if tail and not (tail.startswith(":") and tail[1:].isdigit()):
+            return ""
+        literal = hostpart[1:end]
+        try:
+            ipaddress.ip_address(literal)
+        except ValueError:
+            return ""
+        return literal.lower()
+    if "@" in rest:  # userinfo ends at the LAST @ inside the authority
+        rest = rest.rsplit("@", 1)[1]
+    if ":" in rest:  # host:port — first colon (bare IPv6 never reaches here)
+        rest = rest.split(":", 1)[0]
+    return rest.lower()
+
+
 def extract_url_hosts(line: str) -> list[tuple[str, str]]:
     """``(raw_url, host)`` pairs for URL literals on one line (stable order)."""
     pairs: list[tuple[str, str]] = []
@@ -277,8 +324,8 @@ def extract_url_hosts(line: str) -> list[tuple[str, str]]:
         raw = match.group(0)
         trimmed = raw.rstrip(_TRAILING_JUNK)
         try:
-            host = (urlparse(trimmed).hostname or "").lower()
-        except ValueError:  # pragma: no cover — defensive, urlparse rarely raises
+            host = url_hostname(trimmed)
+        except ValueError:  # pragma: no cover — defensive, parser rarely raises
             continue
         if host:
             pairs.append((trimmed, host))

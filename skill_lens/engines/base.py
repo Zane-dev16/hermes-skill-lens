@@ -271,9 +271,13 @@ class Finding:
     id: str = ""
     locations: tuple[Location, ...] = ()
     additional_location_count: int = 0
+    #: Additive engine-supplied machine detail (E8 depintel package refs).
+    #: Serialized ONLY when non-empty so every other finding keeps its
+    #: historical §7 wire shape byte-exact (report/1 additive-growth law).
+    detail: tuple[dict[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "id": self.id,
             "fingerprint": self.fingerprint,
             "rule_id": self.rule_id,
@@ -299,6 +303,9 @@ class Finding:
             "suppressed_by": self.suppressed_by,
             "llm_touched": self.llm_touched,
         }
+        if self.detail:  # additive key only when set — wire shape stays byte-exact
+            payload["detail"] = [dict(item) for item in self.detail]
+        return payload
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> Finding:
@@ -333,6 +340,7 @@ class Finding:
             id=str(raw.get("id", "")),
             locations=locations,
             additional_location_count=int(raw.get("additional_location_count", 0) or 0),
+            detail=tuple(dict(item) for item in raw.get("detail", ()) if isinstance(item, Mapping)),
         )
 
 
@@ -418,6 +426,7 @@ def dedup_findings(findings: Iterable[Finding]) -> list[Finding]:
                 id=survivor.id,
                 locations=tuple(listed),
                 additional_location_count=additional,
+                detail=survivor.detail,
             )
         )
     return merged

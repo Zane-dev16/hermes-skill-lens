@@ -1,0 +1,13 @@
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-DEP-001"
+severity_band = ["LOW"]
+
+[[expect_rules]]
+rule_id = "LNS-DEP-002"
+severity_band = ["MEDIUM"]
+
+[[expect_rules]]
+rule_id = "LNS-DEP-003"
+severity_band = ["MEDIUM"]

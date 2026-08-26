@@ -1,0 +1,42 @@
+# E8 — npm install lifecycle hooks (preinstall/install/postinstall): the
+# script field EXECUTES at install time on any consumer that runs npm against
+# this bundle — a demonstrated execution surface, hence static_only=false
+# (same reasoning as SEC-001's usable-as-is bar, D-024). D-036 explicitly
+# deferred package.json hooks from E5 jsscan to E8 depintel. Severity MED
+# cap: the hook's existence is declarative; the download-and-execute body
+# refinement raises CONFIDENCE (0.90 -> 0.97), never severity (D-FP).
+id: LNS-DEP-003
+title: "npm install lifecycle hook declares install-time commands"
+rule_version: "1"
+status: active
+engine: depintel
+capability: supply-chain
+severity: MEDIUM
+weight: 7
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: false
+tags:
+  - lifecycle-hook
+  - dependency-manifest
+remediation: >-
+  Remove install-time hooks from distributed skill bundles or replace them
+  with documented setup steps the user runs deliberately and can inspect;
+  postinstall code executes with the installer's privileges before anyone
+  reviews it.
+rationale: >-
+  A package.json scripts entry under preinstall/install/postinstall is code
+  that runs automatically during dependency installation — historically the
+  single most abused npm distribution vector.
+detection: >-
+  package.json scripts declaring non-empty preinstall/install/postinstall
+  commands fire once per key. Confidence refines to 0.97 when the command
+  body matches download-and-execute shapes (curl|wget piped to an
+  interpreter, node -e/--eval, powershell -enc, iwr|iex). Fingerprint binds
+  the key plus the whitespace/case-normalized command shape so edits re-key
+  while formatting churn does not.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/typosquat-deps
+  negative:
+    - corpus/fixtures/benign/pinned-deps-helper

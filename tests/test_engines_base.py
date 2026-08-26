@@ -42,6 +42,7 @@ def pack():
 
 def test_registered_engines_satisfy_protocol(pack) -> None:
     assert available_engines() == {
+        "depintel",
         "jsscan",
         "manifest",
         "netgraph",

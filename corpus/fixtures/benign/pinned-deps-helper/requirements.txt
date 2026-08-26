@@ -1,0 +1,4 @@
+requests==2.31.0
+pyyaml==6.0.1
+rich==13.7.1
+click>=8.1.7

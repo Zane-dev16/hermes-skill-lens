@@ -216,7 +216,14 @@ def sanitize_invisible(text: str) -> Iterator[tuple[int, int, str]]:
     Sanctioned positions are skipped HERE so callers see exactly the set
     that counts toward findings: BOM only past text position 0, emoji-join
     ZWJ, typographic ZWNJ. Deterministic left-to-right sweep.
+
+    PERF (Phase 3 budgets): every counted codepoint lives at ≥ U+200B
+    (INVISIBLE_CLASSES is the single source), so pure-ASCII text can never
+    yield — skip the O(bytes) Python-level sweep entirely. Output-identical
+    by construction; vectors/corpus goldens pin the equivalence empirically.
     """
+    if text.isascii():
+        return
     first = True
     for line_no, line in enumerate(text.splitlines(), start=1):
         for col, ch in enumerate(line):
@@ -252,7 +259,13 @@ def strip_invisible(text: str) -> str:
 
 
 def ghost_stream(text: str) -> str:
-    """The GHOST view: extracted invisible codepoints, in order (§5.1)."""
+    """The GHOST view: extracted invisible codepoints, in order (§5.1).
+
+    Same ASCII short-circuit as :func:`sanitize_invisible` — no counted
+    codepoint is ASCII, so an ASCII input always extracts to ``""``.
+    """
+    if text.isascii():
+        return ""
     ordered: list[tuple[tuple[int, int], str]] = []
     for line_no, line in enumerate(text.splitlines(), start=1):
         for col, ch in enumerate(line):
@@ -267,7 +280,12 @@ def decode_tags_payload(text: str) -> str:
 
     Non-ASCII results (NUL, control rows) are dropped; printable runs below
     :data:`_MIN_DECODED_RUN` are noise, not a channel, and come back empty.
+
+    PERF: the Tags block sits at U+E0000+, so ASCII input can never decode
+    to anything — skip the per-character sweep (output-identical shortcut).
     """
+    if text.isascii():
+        return ""
     raw = "".join(chr(ord(ch) - 0xE0000) for ch in text if _TAGS_LO <= ord(ch) <= _TAGS_HI)
     printable = "".join(ch for ch in raw if 0x20 <= ord(ch) <= 0x7E)
     runs = [run.strip() for run in re.split(r"\s{2,}", printable)]

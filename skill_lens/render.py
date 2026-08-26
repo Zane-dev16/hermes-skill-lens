@@ -35,6 +35,18 @@ COVERAGE_FOOTER = (
     "(tool output) are out of scope · lens explain coverage"
 )
 
+#: G2 enriched marker (SPEC §14: any network feature is opt-in, named, and
+#: logged in-report). Appended to the footer ONLY when the envelope carries
+#: an ``enrichment`` block (i.e. the user explicitly passed --osv); the bare
+#: footer stays byte-frozen for every default-path render.
+ENRICHMENT_MARKER = " · osv-enriched (--osv network opt-in active)"
+
+
+def envelope_enriched(envelope: Mapping[str, Any]) -> bool:
+    """True when this envelope went through an opt-in enrichment pass."""
+    return bool((envelope.get("enrichment") or {}).get("provider"))
+
+
 #: Chat budgets (§11.3 normative): soft target, hard ceiling.
 CHAT_SOFT_BUDGET = 1200
 CHAT_HARD_BUDGET = 1800
@@ -309,6 +321,8 @@ def _chat_body(
 
     inner = "\n\n".join(section.strip("\n") for section in sections)
     inner += "\n" + COVERAGE_FOOTER
+    if envelope_enriched(envelope):
+        inner += ENRICHMENT_MARKER
     return f"{_FENCE}\n{inner}\n{_FENCE}\n"
 
 

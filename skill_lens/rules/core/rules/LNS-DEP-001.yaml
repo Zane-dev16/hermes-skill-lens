@@ -1,0 +1,41 @@
+# E8 — R8 supply-chain hygiene: dependency declared with NO version
+# information anywhere in its spec. A floating target resolves to whatever
+# publishes next under that name — the exact surface dependency-confusion and
+# account-takeover hijacks ride. LOW hygiene note, static_only=true (pure
+# structural fact about the manifest text; nothing executed).
+id: LNS-DEP-001
+title: "Dependency declares no version pin"
+rule_version: "1"
+status: active
+engine: depintel
+capability: supply-chain
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: true
+tags:
+  - unpinned-dependency
+  - dependency-manifest
+remediation: >-
+  Pin every dependency to an exact version (== in requirements/pyproject,
+  concrete ranges or lockfiles for npm) so a compromised or renamed upstream
+  cannot silently flow into installs.
+rationale: >-
+  Unpinned dependencies are the cheapest supply-chain hijack in the
+  ecosystem: whoever controls the name (or a namespace a resolver falls back
+  to) controls what every future install executes.
+detection: >-
+  Over requirements*.txt, pyproject.toml ([project] dependencies +
+  optional-dependencies + [tool.poetry.dependencies]) and package.json
+  (dependencies/devDependencies/optionalDependencies): fire once per
+  dependency whose post-name spec carries NO digit and no direct reference
+  (@ URL / VCS pin). Comparators all carry digits by grammar; caret/tilde
+  Poetry ranges anchor a base version and count as pinned. One finding per
+  package identity; cross-file duplicates collapse on the shared
+  fingerprint.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/typosquat-deps
+  negative:
+    - corpus/fixtures/benign/pinned-deps-helper

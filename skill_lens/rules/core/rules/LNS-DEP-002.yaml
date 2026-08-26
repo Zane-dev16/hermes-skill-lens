@@ -1,0 +1,43 @@
+# E8 — R8 typosquat heuristic (OFFLINE): declared name is a lookalike of a
+# top-known package — homoglyph/confusable form (E2 TR39-style skeleton
+# table, D-037), leet collapse, or edit distance <= 2 of an allowlist entry.
+# Heuristic band: severity capped MED per D-FP, evidence_kind regex at the
+# weak-evidence confidence ceiling 0.72 (D-035 convention). static_only=true:
+# name-shape analysis demonstrates no execution path by itself.
+id: LNS-DEP-002
+title: "Dependency name looks like a typosquat of a known package"
+rule_version: "1"
+status: active
+engine: depintel
+capability: supply-chain
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.72
+static_only: true
+tags:
+  - typosquat
+  - dependency-manifest
+remediation: >-
+  Verify the exact spelling against the official registry before installing;
+  typosquat names harvest mistyped installs of popular packages. Prefer
+  copy-paste from vendor docs over hand-typed names.
+rationale: >-
+  Squat packages live one keystroke away from every top package name and are
+  published for exactly one reason: to be installed by mistake. Offline
+  shape heuristics surface them without any network lookup.
+detection: >-
+  Every declared dependency name (same manifest scope as LNS-DEP-001) is
+  compared OFFLINE against the bundled allowlists of top-known PyPI/npm
+  packages. Fires when the name (a) skeleton-matches a known package via the
+  E2 confusable table while differing raw (homoglyph), (b) collapses to a
+  known package under leet normalization (0->o, 1->l, 3->e, 4->a, 5->s,
+  7->t, 8->b), or (c) sits within Damerau-Levenshtein distance 2 of up to
+  three nearest allowlist entries. Names already on the allowlist and names
+  shorter than 4 chars never fire (distance from short names spans most of
+  the alphabet). Fingerprint binds name+kind+nearest-target.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/typosquat-deps
+  negative:
+    - corpus/fixtures/benign/pinned-deps-helper
