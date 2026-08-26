@@ -15,9 +15,11 @@ identical inputs across runs and machines.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any
 
+from skill_lens.baseline import apply_baselines
 from skill_lens.engines import ScanResult
 from skill_lens.ir import TOOL_NAME, tool_version
 from skill_lens.scoring import score_findings
@@ -35,14 +37,26 @@ def build_report(
     *,
     profile: str = DEFAULT_PROFILE,
     policy_sources: tuple[str, ...] | None = None,
+    baseline_entries: Sequence[Any] = (),
+    report_date: date | None = None,
 ) -> dict[str, Any]:
     """Assemble the ``report/1`` envelope from a :class:`ScanResult`.
 
     Pure function of the scan output + policy labels; scoring is computed
     here via :func:`skill_lens.scoring.score_findings`. Never raises on
     finding-shape drift — the scorer tolerates junk buckets by design.
+
+    Baseline stage (Phase 2): when *baseline_entries* is non-empty, the
+    suppression pass runs AFTER dedup (``scan_bundle`` output is already
+    deduped) and BEFORE scoring — suppressed findings keep their full §7
+    record in the envelope but price nothing, so scores stay a deterministic
+    function of (bundle bytes, policy, baseline set, report date). Default
+    arguments preserve byte-identical historical behavior (golden vectors).
     """
-    score = score_findings(result.findings)
+    findings: list[dict[str, Any]] = list(result.findings)
+    if baseline_entries:
+        findings, _stats = apply_baselines(findings, baseline_entries, report_date=report_date)
+    score = score_findings(findings)
     ir = result.ir
 
     return {
@@ -71,8 +85,8 @@ def build_report(
             "checksum": result.rule_pack_checksum,
         },
         "score": score.to_dict(),
-        "findings": [dict(finding) for finding in result.findings],
-        "suppressed_count": sum(1 for f in result.findings if f.get("suppressed")),
+        "findings": findings,
+        "suppressed_count": sum(1 for f in findings if f.get("suppressed")),
         "claims": [claim.to_dict() for claim in ir.claims],
         "notes": list(ir.notes),
     }
