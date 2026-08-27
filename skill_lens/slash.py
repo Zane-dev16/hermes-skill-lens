@@ -1023,6 +1023,9 @@ def _verb_rules(
     themselves and run this verb to prove its bytes.
     """
     del view  # uniform verb signature; verification needs no host state
+    # ``--plain`` rides the CLI lane's _emit (namespace flag); accept and
+    # ignore it here so token reconstruction never becomes a fake action.
+    args = [a for a in args if a != "--plain"]
     action = args[0].lower() if args else "verify"
     if action in ("-h", "--help", "help"):
         return _RULES_USAGE
