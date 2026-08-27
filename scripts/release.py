@@ -254,8 +254,9 @@ def cmd_cut(args: argparse.Namespace) -> int:
     notes_path.write_text(_release_notes(version, artifact_sha, fingerprint), encoding="utf-8")
 
     _git("add", "plugin.yaml", "pyproject.toml")
-    _git("-c", "user.name=Irell Zane", "-c", "user.email=irell@users.noreply.github.com",
-         "commit", "-m", f"release: v{version} (core pack {pv})")
+    # Identity comes from repo config ONLY (/standard-commit law; no -c/env
+    # overrides — D-058 records the incident this fix closes).
+    _git("commit", "-m", f"release: v{version} (core pack {pv})")
     if args.tag:
         tag_message = (
             f"Skill Lens v{version}\n"
