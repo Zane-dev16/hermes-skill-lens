@@ -11,3 +11,13 @@ dist/
 # (docs/key-ceremony.md). Public key + detached core-pack signature live in
 # keys/ and ARE committed.
 build-state/keys/
+
+# Planning / source docs live one level up (outer working dir), NOT in the
+# distribution artifact (owner direction, D-059). Keep the artifact clean.
+BUILD_PROMPT.md
+PLAN.md
+SPEC.md
+HARD_QUESTIONS.md
+FUN.md
+DECISIONS.md
+QUESTIONS_FOR_OWNER.md
