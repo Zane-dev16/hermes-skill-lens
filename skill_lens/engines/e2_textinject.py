@@ -72,6 +72,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Iterable, Iterator
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from ..claims import finding_fingerprint, is_declared
@@ -416,10 +417,23 @@ _TOKEN_RE = re.compile(r"[^\W_]+(?:[.\-/][^\W_]+)*", re.UNICODE)
 _LATIN_RE = re.compile(r"[A-Za-z]")
 _CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 _GREEK_RE = re.compile(r"[\u0370-\u03FF]")
+#: One-scan gate: scripts that can participate in the mixed-script attack
+#: marker. Cheap disjunctive prefilter — the Latin half of the conjunction is
+#: only worth scanning when a suspect script is present at all.
+_SUSPECT_SCRIPT_RE = re.compile(r"[\u0400-\u04FF\u0370-\u03FF]")
 
 
+_SUSPECT_SCRIPT_RE = re.compile(r"[\u0400-\u04FF\u0370-\u03FF]")
+
+
+@lru_cache(maxsize=8192)
 def skeleton(token: str) -> str:
-    """TR39-style skeleton (subset): NFKC → casefold → confusable map."""
+    """TR39-style skeleton (subset): NFKC → casefold → confusable map.
+
+    PERF (Phase-6 budget repair, D-056): pure function over an immutable
+    argument — memoized. Corpus workloads repeat tokens heavily; the perf
+    baseline pins the wall-clock gain while unit vectors pin values.
+    """
     return unicodedata.normalize("NFKC", token).casefold().translate(_CONFUSABLE_TABLE)
 
 
@@ -430,9 +444,11 @@ def confusable_hits(line: str) -> list[tuple[str, str]]:
         folded = skeleton(token)
         if folded != token.casefold() and folded in PROTECTED_VOCAB:
             hits.append((token, folded))
-        elif _LATIN_RE.search(token) and (_CYRILLIC_RE.search(token) or _GREEK_RE.search(token)):
+        elif _SUSPECT_SCRIPT_RE.search(token) and _LATIN_RE.search(token):
             # Mixed-script identifier (Latin + Cyrillic/Greek in ONE token):
             # the classic homoglyph attack marker even without a vocab match.
+            # Conjunction reordered (suspect-script scan first) — logically
+            # identical predicate, materially cheaper on ASCII-heavy files.
             hits.append((token, "*mixed-script*"))
     return hits
 
@@ -811,8 +827,19 @@ class TextInjectEngine:
         and caller-supplied extra views (the DECODED Tags payload).
         Identical normalized spans collapse to one finding.
         """
-        clean_lines = strip_invisible("\n".join(lines)).splitlines()
-        views = [*lines, *clean_lines, "\n".join(clean_lines), *extra_views]
+        joined_raw = "\n".join(lines)
+        joined_clean = strip_invisible(joined_raw)
+        if joined_clean != joined_raw:
+            # Real invisible traffic: rebuild the clean view family.
+            clean_lines = joined_clean.splitlines()
+            views = [*lines, *clean_lines, joined_clean, *extra_views]
+        else:
+            # Zero strippable codepoints in the whole file: every clean view
+            # would be a BYTE-EQUAL duplicate of its raw counterpart, and the
+            # ``seen`` dedup collapses identical spans anyway — emit only the
+            # two distinct views. Output-identical by construction (equal
+            # strings cannot yield unequal hit sets); goldens pin empirically.
+            views = [*lines, joined_raw, *extra_views]
         seen: set[str] = set()
         findings: list[Finding] = []
         for view_index, view in enumerate(views):
