@@ -6,3 +6,8 @@ __pycache__/
 .coverage
 dist/
 *.egg-info/
+
+# Phase 5 governance: private signing keys NEVER leave the machine
+# (docs/key-ceremony.md). Public key + detached core-pack signature live in
+# keys/ and ARE committed.
+build-state/keys/

@@ -49,3 +49,10 @@ python_dependencies:
   - tree-sitter-python>=0.23,<0.26
   - tree-sitter-javascript>=0.23,<0.26
   - tree-sitter-bash>=0.23,<0.26
+  # Phase 5 (SPEC §15): ed25519 verification of the core-pack signature
+  # (doctor check 1 + `rules verify`) — OFFLINE crypto only, never network.
+  # Declaration seam only (host validates + warns); without any backend the
+  # doctor degrades to an honest WARN and tamper still fails on checksum
+  # comparison. PyNaCl is an accepted fallback backend; cryptography is the
+  # declared primary (DECISIONS D-055).
+  - cryptography>=42

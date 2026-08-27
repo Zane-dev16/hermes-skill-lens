@@ -10,8 +10,12 @@ operators (wall-clock ``ts`` rides there only — sidecar exemption).
 
 The nine checks, numbered exactly as SPEC lists them:
 
-1. Rule-pack version + checksum integrity (honest WARN until Phase 5 ships
-   release signatures — we can pin bytes, not yet provenance).
+1. Rule-pack version + checksum + SIGNATURE integrity: since Phase 5 the
+   embedded core pack is verified OFFLINE against the committed ed25519
+   public key (keys/pack-signing.pub.pem) and its detached signature
+   (keys/core-pack-<version>.sig). Verified ⇒ PASS (provenance proven);
+   missing key/sig or no crypto backend ⇒ honest WARN; PRESENT-but-invalid
+   signature (tampered bytes, stale sig) ⇒ LOUD hard FAIL.
 2. Policy parse + effective profile with ALL sources listed (§10 layers).
 3. Plugin-data writable; ``jobs.json``/``events.ndjson`` healthy; quota
    bounds respected.
@@ -185,19 +189,26 @@ class DoctorReport:
 # ---------------------------------------------------------------------------
 
 
-def check_rule_pack() -> tuple[CheckResult, str, str]:
-    """Check 1 — rule-pack version + checksum integrity.
+def check_rule_pack(
+    root: Path | None = None, *, pack: Any = None
+) -> tuple[CheckResult, str, str]:
+    """Check 1 — rule-pack version + checksum + SIGNATURE integrity.
 
-    Loads the embedded core pack and pins ``content_checksum`` (same D-HASH
-    recipe as bundles). Release SIGNATURES land in Phase 5; until then the
-    honest status is WARN ("unsigned") — checksum proves byte integrity of
-    whatever shipped, not who shipped it.
+    Loads the embedded core pack, pins ``content_checksum`` (same D-HASH
+    recipe as bundles), then verifies the committed detached ed25519
+    signature offline via :func:`skill_lens.packsec.verify_core_signature`
+    — the two surfaces share one implementation so ``rules verify`` and
+    this check cannot drift. *root* / *pack* inject an alternate plugin
+    tree for tamper tests; production callers use the real one.
     """
     title = "rule-pack integrity"
     try:
+        from . import packsec
         from .rules import load_core_pack
 
-        pack = load_core_pack()
+        if pack is None:
+            pack = load_core_pack()
+        report = packsec.verify_core_signature(root=root, pack=pack)
     except Exception as exc:  # noqa: BLE001 — unreadable pack is total error
         return (
             CheckResult(
@@ -211,22 +222,29 @@ def check_rule_pack() -> tuple[CheckResult, str, str]:
             "",
             "",
         )
-    checksum = pack.content_checksum()
-    short = f"{checksum[:15]}…{checksum[-6:]}"
-    return (
-        CheckResult(
-            1,
-            "rule-pack",
-            title,
-            WARN,
-            (
-                f"v{pack.version} · {len(pack.active_rules())} active rules · {short}",
-                "unsigned — release signatures land in Phase 5 (rules verify)",
+    if report.status == "pass":
+        return (
+            CheckResult(1, "rule-pack", title, PASS, report.lines),
+            pack.version,
+            report.checksum,
+        )
+    if report.status == "fail":
+        return (
+            CheckResult(
+                1,
+                "rule-pack",
+                title,
+                FAIL,
+                report.lines,
+                hard=True,
             ),
-            hard=False,
-        ),
+            pack.version,
+            report.checksum,
+        )
+    return (
+        CheckResult(1, "rule-pack", title, WARN, report.lines),
         pack.version,
-        checksum,
+        report.checksum,
     )
 
 

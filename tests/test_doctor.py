@@ -143,10 +143,50 @@ def test_scratch_home_has_zero_hard_failures(wired_view: PluginContextView) -> N
     report = run_doctor(wired_view)
     assert report.failures == []
     assert report.exit_code == 0
-    # Honest-warning law: the unsigned rule pack MUST warn until P5 signing.
+    # Phase 5: with the committed ceremony keys present the check is a real
+    # signature verification (PASS); in trees without keys/ it degrades to
+    # an honest WARN — but NEVER a silent claim of provenance.
     pack = report.checks[0]
-    assert pack.status == WARN
-    assert any("unsigned" in d for d in pack.detail)
+    if (Path(__file__).resolve().parents[1] / "keys" / "pack-signing.pub.pem").is_file():
+        assert pack.status == PASS
+        assert any("verified" in d for d in pack.detail)
+    else:
+        assert pack.status == WARN
+        assert any("unsigned" in d for d in pack.detail)
+
+
+def test_check1_tampered_signature_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 5 law: a PRESENT-but-invalid signature ⇒ hard FAIL, exit 2."""
+    import shutil
+
+    from skill_lens.doctor import check_rule_pack
+    from skill_lens.rules import core_pack_path
+
+    if not (Path(__file__).resolve().parents[1] / "keys" / "pack-signing.pub.pem").is_file():
+        pytest.skip("ceremony keys not present in this tree")
+
+    root = tmp_path / "plugin"
+    (root / "skill_lens" / "rules").mkdir(parents=True)
+    shutil.copytree(core_pack_path(), root / "skill_lens" / "rules" / "core")
+    shutil.copytree(
+        Path(__file__).resolve().parents[1] / "keys", root / "keys"
+    )
+    # Flip one byte of pack semantics.
+    target = root / "skill_lens" / "rules" / "core" / "pack.yaml"
+    target.write_text(target.read_text(encoding="utf-8").replace("name: core", "name: corX", 1))
+
+    from skill_lens.rules import load_pack
+
+    result, version, checksum = check_rule_pack(
+        root=root, pack=load_pack(root / "skill_lens" / "rules" / "core")
+    )
+    assert result.status == FAIL
+    assert result.hard is True
+    joined = "\n".join(result.detail)
+    assert "SIGNATURE MISMATCH" in joined or "REJECTED" in joined
+    assert version and checksum.startswith("sha256:")
 
 
 def test_check1_reports_version_and_checksum(view: PluginContextView) -> None:

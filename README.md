@@ -2,24 +2,58 @@
 
 **A lens, not a bouncer.** A pure-Python [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that scans agent skill bundles and produces a **deterministic** security report: trust score, grade, claimed-vs-actual capability diff, evidence-cited findings.
 
-Skill Lens is an **advisor, not a gate**: it registers observer hooks only (`on_skill_lifecycle`, `post_tool_call`, `transform_tool_result`) — never `pre_tool_call` — never blocks an install, opens zero network sockets, and requires no LLM in its default path.
+Skill Lens is an **advisor, not a gate**: it registers observer hooks only (`on_skill_lifecycle`, `post_tool_call`, `transform_tool_result`) — never `pre_tool_call` — never blocks an install, opens zero network sockets in its default path, and requires no LLM. static analysis only — runtime-injected instructions are out of scope · clean != safe
+
+## Quickstart
+
+1. **Install** (Hermes plugin; flat directory, discovered from your plugins dir):
+
+   ```bash
+   hermes plugins install Zane-dev16/hermes-skill-lens
+   # or from a checkout:
+   ln -s "$PWD/hermes-skill-lens" "$HERMES_HOME/plugins/lens"
+   ```
+
+2. **Enable**:
+
+   ```bash
+   hermes plugins enable lens
+   hermes plugins doctor lens        # runtime load proof (registration lines are expected)
+   ```
+
+3. **First scan** — either lane:
+
+   ```bash
+   /lens scan <skill-name>           # in-session; queue-first, answers inline on cache hits
+   hermes lens scan <path-or-name> --json   # CLI; add --fail-on alert for CI gates
+   ```
+
+4. **Reading reports**: `/lens report [name]` renders the full report (verdict line,
+   findings with evidence citations, score/grade); `--json` and `--sarif` give machine
+   surfaces whose `score.verdict` (+ `needs_review`) is THE automation interface. Every
+   surface ends with a coverage-honesty footer naming the rule-pack version + checksum.
+   A clean verdict means "nothing detected", not "safe" — see docs/threat-model.md.
+
+5. **Self-check** when anything looks off: `hermes lens doctor` (nine checks incl.
+   offline signature verification of the rule pack).
+
+Rule packs travel signed and version-pinned with the plugin (`YYYY.MM.N`,
+SPEC §15). Verify provenance any time: `hermes lens rules verify`. Updates
+are manual-only by design.
 
 ## Status
 
-v0.9.0a0 — Phase 0 (plugin spine) under active construction per `PLAN.md`.
-
-## Install (Hermes plugin)
-
-```bash
-hermes plugins install Zane-dev16/hermes-skill-lens
-hermes plugins enable lens
-```
+v0.9.0a0 — Phases 0–4 gated PASS; Phase 5 (governance + release engineering)
+landed per `PLAN.md` §1. See `CHANGELOG.md`.
 
 ## Development
 
 ```bash
 python3 -m pytest -q     # tests
 python3 -m ruff check .  # lint
+python3 scripts/release.py --help        # release engineering
+python3 scripts/sign_core_pack.py show   # pack signature status
 ```
 
-See `docs/dev-loop.md` for the scratch-`HERMES_HOME` load/enable/disable loop.
+See `docs/dev-loop.md` (scratch-HERMES_HOME loop), `docs/rule-author-guide.md`
+(adding rules), `docs/key-ceremony.md` (signing).

@@ -83,6 +83,9 @@ verbs:
   watch [status|start [secs]|stop]
                        out-of-band drift watcher: sweep-on-start is always on;
                        start/stop toggle the opt-in continuous poller
+  rules verify [path]  offline provenance check of the embedded core pack
+                       against the committed ed25519 pubkey (§15); a path
+                       verifies an external/community pack instead
   doctor               nine-check §11.9 self-check: pack, policy, state dirs,
                        host env, wiring audit (zero blocking hooks), network
                        isolation, lifecycle, parse, render — verdict line last
@@ -95,6 +98,21 @@ osv:true (OPT-IN network enrichment via OSV.dev; findings tagged enriched) ·
 also: report --fail-on/--plain · diff --plain
 
 advisor only — lens never blocks installs. clean scan ≠ safe skill.\
+```"""
+
+_RULES_USAGE = """\
+```\
+usage: /lens rules verify [path] [--sig FILE] [--pubkey FILE]
+
+No path: verify the embedded core pack against the committed
+ed25519 public key and detached signature (offline; SPEC §15).
+With path: structurally load an external/community pack and report
+its version + content checksum; add --sig (and --pubkey for a
+third-party trust root) to verify a detached release signature.
+
+Updates are MANUAL ONLY (no fetch verb, no network, ever):
+download a release artifact yourself, then let this verb prove
+its bytes.
 ```"""
 
 
@@ -987,6 +1005,128 @@ def _verb_hub(
     )
 
 
+def _verb_rules(
+    args: list[str], *, view: PluginContextView, sink: dict[str, Any] | None = None
+) -> str:
+    """``rules verify`` — offline provenance check (SPEC §15, D-RULEOWN).
+
+    No argument verifies the EMBEDDED core pack against the committed
+    public key + detached signature (the same engine as doctor check 1,
+    so both surfaces share one implementation). A path argument loads an
+    external/community pack instead: structural load + version/checksum
+    report, plus detached-signature verification when ``--sig`` names a
+    sidecar (public key defaults to the committed one; ``--pubkey``
+    overrides for third-party trust roots).
+
+    Updates are manual-only by design (D-RULEOWN): there is no update
+    verb, no fetch, no network — users download a release artifact
+    themselves and run this verb to prove its bytes.
+    """
+    del view  # uniform verb signature; verification needs no host state
+    action = args[0].lower() if args else "verify"
+    if action in ("-h", "--help", "help"):
+        return _RULES_USAGE
+    if action != "verify":
+        return fast_line_fail(
+            name="rules",
+            reason=f"unknown action {action!r} — usage: rules verify [path] (--sig F) (--pubkey F)",
+        )
+    rest = args[1:]
+    sig_path: str | None = None
+    pub_path: str | None = None
+    positional: list[str] = []
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token == "--sig" and i + 1 < len(rest):
+            sig_path = rest[i + 1]
+            i += 2
+        elif token == "--pubkey" and i + 1 < len(rest):
+            pub_path = rest[i + 1]
+            i += 2
+        elif token.startswith("--"):
+            return fast_line_fail(name="rules", reason=f"unknown flag {token}")
+        else:
+            positional.append(token)
+            i += 1
+    if len(positional) > 1:
+        return fast_line_fail(
+            name="rules", reason="usage: rules verify [path] (--sig F) (--pubkey F)"
+        )
+
+    from . import packsec
+    from .diagnostics import DiagnosticsCollector
+    from .rules import RulePackError, load_pack
+
+    def _set_exit(code: int) -> None:
+        if sink is not None:
+            sink["rules_exit"] = code
+
+    if not positional:
+        report = packsec.verify_core_signature()
+        _set_exit(0 if report.status != "fail" else 2)
+        head = (
+            f"lens rules verify · core {report.checksum[:15]}…"
+            if report.status == "pass"
+            else "lens rules verify · core"
+        )
+        body = "\n".join(report.lines)
+        if report.status == "pass":
+            return f"{head}\n{body}"
+        prefix = (
+            "lens fail · rule-pack signature REJECTED"
+            if report.status == "fail"
+            else head
+        )
+        return f"{prefix}\n{body}"
+
+    target = Path(positional[0])
+    try:
+        pack = load_pack(target, diagnostics=DiagnosticsCollector())
+    except RulePackError as exc:
+        _set_exit(2)
+        return fast_line_fail(name="rules verify", reason=f"rule pack unreadable: {exc}")
+    lines = [
+        f"lens rules verify · {pack.name} {pack.version}",
+        f"{len(pack.rules)} rules ({len(pack.active_rules())} active) · {pack.content_checksum()}",
+    ]
+    exit_code = 0
+    if sig_path or pub_path:
+        default_pub, _default_sig = packsec.locate_core_keys()
+        if pub_path is None and default_pub is not None:
+            pub_path = str(default_pub)
+        if not (sig_path and pub_path):
+            _set_exit(2)
+            return fast_line_fail(
+                name="rules verify",
+                reason=(
+                    "signature check needs --sig FILE plus a pubkey "
+                    "(--pubkey FILE or the committed keys/pack-signing.pub.pem)"
+                ),
+            )
+        try:
+            inputs = packsec.canonical_pack_inputs(target)
+            digest = packsec.canonical_digest(inputs)
+            sig_bytes = packsec.read_sig_file(sig_path)[1]
+            result = packsec.verify_digest(Path(pub_path).read_bytes(), digest, sig_bytes)
+        except packsec.PackSecError as exc:
+            _set_exit(2)
+            return fast_line_fail(name="rules verify", reason=str(exc))
+        if result.ok:
+            lines.append(f"signature verified ({result.fingerprint})")
+        else:
+            lines.append(
+                f"SIGNATURE REJECTED — {result.reason}: treat these pack bytes as untrusted"
+            )
+            exit_code = 2
+    else:
+        lines.append("unsigned check (structural load only — pass --sig to verify origin)")
+    _set_exit(exit_code)
+    if exit_code == 2:
+        return "lens fail · " + lines[-1]
+    return "\n".join(lines)
+
+
 def _verb_doctor(
     args: list[str], *, view: PluginContextView, sink: dict[str, Any] | None = None
 ) -> str:
@@ -1141,6 +1281,10 @@ def dispatch_verb(
         # Drift-watcher control/status (§11.8): operational surface — the
         # "N reports ready" pull banner is noise here, so return directly.
         return _verb_watch(args, view=view)
+    elif verb == "rules":
+        # §15 governance surface: operational, no pull banner. The CLI lane
+        # projects sink["rules_exit"] onto §18's total-error code.
+        return _verb_rules(args, view=view, sink=sink)
     elif verb == "doctor":
         # §11.9 nine-check engine: operational surface — no pull banner.
         return _verb_doctor(args, view=view, sink=sink)

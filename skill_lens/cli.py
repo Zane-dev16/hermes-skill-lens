@@ -115,6 +115,10 @@ def build_cli_handler(view: Any, cache: Any) -> Any:
             # warnings, 2 on any hard check failure. The doctor verb stashes
             # it in the sink; text-prefix heuristics and --fail-on don't apply.
             return int(sink.get("doctor_exit", 0))
+        if verb == "rules":
+            # §18 total-error semantics: a REJECTED rule-pack verification is
+            # a checksum/provenance failure (exit 2); pass/warn exits 0.
+            return int(sink.get("rules_exit", 0))
         if text.startswith(_FAIL_PREFIXES) or _USAGE_MARKER in text.splitlines()[0]:
             return POLICY_EXIT_CODE
         return _fail_on_exit_code(namespace, sink)
@@ -209,6 +213,23 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
             tokens.append(str(secs))
         if getattr(namespace, "plain", False):
             tokens.append("--plain")
+    elif verb == "rules":
+        action = getattr(namespace, "action", None)
+        path = getattr(namespace, "path", None)
+        sig = getattr(namespace, "sig", None)
+        pubkey = getattr(namespace, "pubkey", None)
+        # Default action is implicit; emit it only when a path/flag needs an
+        # anchor so token reconstruction stays canonical either way.
+        if path or sig or pubkey:
+            tokens.append(action or "verify")
+        if path:
+            tokens.append(str(path))
+        if sig:
+            tokens.extend(["--sig", str(sig)])
+        if pubkey:
+            tokens.extend(["--pubkey", str(pubkey)])
+        if getattr(namespace, "plain", False):
+            tokens.append("--plain")
     return tokens
 
 
@@ -265,6 +286,18 @@ def setup_parser(parser: Any) -> None:
     p_watch.add_argument("action", nargs="?", default="status")
     p_watch.add_argument("secs", nargs="?", default=None)
     p_watch.add_argument("--plain", action="store_true")
+
+    p_rules = subparsers.add_parser(
+        "rules",
+        help="rule-pack governance: verify [path] [--sig F] [--pubkey F] (offline; §15)",
+    )
+    p_rules.add_argument("action", nargs="?", default="verify")
+    p_rules.add_argument("path", nargs="?", default=None)
+    p_rules.add_argument("--sig", dest="sig", default=None)
+    p_rules.add_argument("--pubkey", dest="pubkey", default=None)
+    # rules carries --plain only: its output is a verdict notice, not a
+    # score envelope a threshold could gate.
+    p_rules.add_argument("--plain", action="store_true")
 
     subparsers.add_parser("help", help="usage block")
 

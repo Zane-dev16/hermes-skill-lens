@@ -1,0 +1,100 @@
+# Rule-pack governance CI (SPEC §15 / PLAN §1 Phase 5).
+#
+# Runs on every PR or push touching the rule pack, the corpus fixtures, or
+# the signing material. Three jobs:
+#
+#   1. fixtures   — §15 fixture MANDATE: every rule needs >=1 true-positive
+#                   AND >=1 benign-lookalike negative fixture, all paths
+#                   existing (scripts/rule_fixtures_check.py) plus the full
+#                   corpus harness (malicious fire expected bands, benign stay
+#                   silent) and the benign-floor probe.
+#   2. governor   — packver semver enforcement between base and head
+#                   (new rule = patch; weight/severity change = minor +
+#                   rationale; deprecation >=2 minors) + CHANGELOG.md mirror
+#                   byte-sync.
+#   3. signature  — rebuild the deterministic artifact from HEAD and verify
+#                   the committed detached signature matches. On PRs a stale
+#                   signature WARNS (the maintainer re-signs at merge);
+#                   on main pushes and version tags it is a HARD FAIL —
+#                   main must always ship a signature over its exact bytes.
+#
+# All three jobs are pure-offline; no secrets are needed (the PRIVATE key
+# never lives on CI — signing happens on the release machine per
+# docs/key-ceremony.md).
+
+name: rule-pack
+
+on:
+  pull_request:
+    paths:
+      - "skill_lens/rules/**"
+      - "corpus/**"
+      - "keys/**"
+      - ".github/workflows/rule-pack.yml"
+  push:
+    branches: [main]
+    paths:
+      - "skill_lens/rules/**"
+      - "corpus/**"
+      - "keys/**"
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install test tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-socket hypothesis PyYAML \
+            rich jsonschema cryptography
+      - name: Fixture mandate (>=1 positive AND >=1 negative per rule)
+        run: python3 scripts/rule_fixtures_check.py
+      - name: Corpus harness (expected bands + benign silence)
+        run: >-
+          python3 -m pytest tests/test_corpus.py tests/test_benign_floor.py -q
+
+  governor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Governor diffs against the merge base; fetch enough history.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML cryptography
+      - name: Semver governor (base -> head)
+        run: |
+          BASE="${{ github.event.pull_request.base.ref || 'main' }}"
+          python3 scripts/pack_governor_check.py --base "origin/${BASE}"
+
+  signature:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyYAML cryptography
+      - name: Rebuild artifact + verify committed signature
+        run: |
+          python3 scripts/release.py verify-core
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Main must ALWAYS carry a signature over its exact bytes.
+            python3 scripts/release.py check-signature-fresh --strict
+          else
+            # PRs warn on staleness; re-sign happens at merge time.
+            python3 scripts/release.py check-signature-fresh || echo \
+              "::warning::core-pack signature stale — re-sign at merge"
+          fi

@@ -164,6 +164,11 @@ class Rule:
     fixtures_positive: tuple[str, ...]
     fixtures_negative: tuple[str, ...]
     source_path: str  # display label of the YAML file it came from
+    #: §15 deprecation bookkeeping — the pack version that marked this rule
+    #: ``deprecated`` (governor computes the ≥2-minor removal horizon from
+    #: it). None while the rule is live; deliberately EXCLUDED from
+    #: ``to_dict`` so the machine finding/report shape stays byte-stable.
+    deprecated_since: str | None = None
 
     @property
     def capability(self) -> str:
@@ -595,6 +600,19 @@ def _build_rule(
     if origin_raw is not None and not isinstance(origin_raw, str):
         raise RulePackError(f"{where}: rule {rule_id} 'origin' must be a string when present")
 
+    deprecated_raw = raw.get("deprecated_since")
+    if deprecated_raw is not None:
+        if not isinstance(deprecated_raw, str):
+            raise RulePackError(
+                f"{where}: rule {rule_id} 'deprecated_since' must be a version string"
+            )
+        _validate_pack_version(deprecated_raw)
+        if status != "deprecated":
+            raise RulePackError(
+                f"{where}: rule {rule_id} declares 'deprecated_since' but status is "
+                f"{status!r} (only deprecated rules carry a deprecation version)"
+            )
+
     fixtures_raw = raw.get("fixtures", {})
     positive, negative = _validate_fixtures(
         fixtures_raw, rule_id=rule_id, where=where, status=status
@@ -621,6 +639,7 @@ def _build_rule(
         fixtures_positive=positive,
         fixtures_negative=negative,
         source_path=where,
+        deprecated_since=deprecated_raw,
     )
 
 
@@ -643,6 +662,7 @@ _RULE_KNOWN_FIELDS = frozenset(
         "detection",
         "origin",
         "fixtures",
+        "deprecated_since",
     }
 )
 
