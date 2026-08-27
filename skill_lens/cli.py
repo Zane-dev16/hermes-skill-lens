@@ -109,6 +109,9 @@ def build_cli_handler(view: Any, cache: Any) -> Any:
             # so logs stay greppable across surfaces.
             print(policy_failure_notice(exc), file=sys.stderr)
             return POLICY_EXIT_CODE
+        # Verbs may hand the CLI lane a dedicated §12.1 panel render (map);
+        # the slash lane never sees it (D-SURF lane split).
+        text = sink.pop("cli_text", None) or text or ""
         _emit(text, plain=plain)
         if verb == "doctor":
             # §11.9 exit policy lives in the report itself: 0 even on
@@ -176,6 +179,19 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
         if getattr(namespace, "json", False):
             tokens.append("--json")
         common_flags()
+    elif verb == "map":
+        target = getattr(namespace, "target", None)
+        if target:
+            tokens.append(str(target))
+        common_flags()
+    elif verb == "autopsy":
+        name = getattr(namespace, "name", None)
+        if name:
+            tokens.append(str(name))
+        voice = getattr(namespace, "voice", None)
+        if voice:
+            tokens.extend(["--voice", str(voice)])
+        common_flags()
     elif verb == "baseline":
         name = getattr(namespace, "name", None)
         if name:
@@ -228,6 +244,15 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
             tokens.extend(["--sig", str(sig)])
         if pubkey:
             tokens.extend(["--pubkey", str(pubkey)])
+        if getattr(namespace, "plain", False):
+            tokens.append("--plain")
+    elif verb == "bones":
+        target = getattr(namespace, "target", None)
+        if target:
+            tokens.append(str(target))
+        if getattr(namespace, "plain", False):
+            tokens.append("--plain")
+    elif verb == "lens":
         if getattr(namespace, "plain", False):
             tokens.append("--plain")
     return tokens
@@ -298,6 +323,30 @@ def setup_parser(parser: Any) -> None:
     # rules carries --plain only: its output is a verdict notice, not a
     # score envelope a threshold could gate.
     p_rules.add_argument("--plain", action="store_true")
+
+    p_map = subparsers.add_parser(
+        "map", help="SkillIR tree: files, claims vs capabilities, provenance note"
+    )
+    p_map.add_argument("target")
+    _add_common_flags(p_map)
+
+    p_autopsy = subparsers.add_parser(
+        "autopsy",
+        help="deep narrative walkthrough (voices OPT-IN: clinical default, microscopy;"
+        " noir deferred per HQ O4)",
+    )
+    p_autopsy.add_argument("name")
+    p_autopsy.add_argument("--voice", dest="voice", default=None)
+    _add_common_flags(p_autopsy)
+
+    # Hidden verbs get a WINK, not real help copy (FUN.md F-6: "never listed
+    # in help text beyond a wink"); the host's own help stays uncluttered.
+    p_bones = subparsers.add_parser("bones", help="try it and see (wink)")
+    p_bones.add_argument("target", nargs="?", default=None)
+    p_bones.add_argument("--plain", action="store_true")
+
+    p_self = subparsers.add_parser("lens", help="the instrument, examined by itself")
+    p_self.add_argument("--plain", action="store_true")
 
     subparsers.add_parser("help", help="usage block")
 

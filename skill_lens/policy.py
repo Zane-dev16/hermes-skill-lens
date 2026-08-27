@@ -106,6 +106,10 @@ KNOWN_SETTINGS_KEYS: tuple[str, ...] = (
     "discord_spoilers",
     "voice",
     "chat_budget_chars",
+    # Phase 6 (SPEC §16): master kill-switch for the opt-in personality
+    # layer. Default true; false pins the voice register to clinical and
+    # refuses non-default --voice flags — the switch must beat flags.
+    "fun.allow_voices",
 )
 
 _SETTINGS_LABEL_BASE = "plugin settings plugins.entries.lens.settings"
@@ -337,6 +341,7 @@ def _coerce_setting(key: str, value: Any) -> Any | None:
         "discord_spoilers": (bool,),
         "voice": (str,),
         "chat_budget_chars": (int,),
+        "fun.allow_voices": (bool,),
     }
     allowed = expectations.get(key)
     if allowed is None:

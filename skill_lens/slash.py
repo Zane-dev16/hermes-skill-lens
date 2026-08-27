@@ -72,6 +72,12 @@ verbs:
   scan <name|path>     queue a security scan (cold scans run on the lens worker;
                        cache hits answer inline)
   report [name]        latest cached report for an installed skill
+  map <name|path>      SkillIR tree: files, claims vs capabilities graph,
+                       hub-provenance annotation (the "what did I agree to" view)
+  autopsy <name> [--voice clinical|microscopy]
+                       deep narrative walkthrough of the latest report;
+                       voices are OPT-IN (default clinical stays sober;
+                       noir is deferred — HARD_QUESTIONS O4)
   baseline <name> --reason "…" [--expires DATE]
                        record current fingerprints into <skill>/.lens/baseline.toml
   explain-rules [--rule ID]
@@ -90,6 +96,8 @@ verbs:
                        host env, wiring audit (zero blocking hooks), network
                        isolation, lifecycle, parse, render — verdict line last
   help                 this block
+
+also hiding: /lens bones · /lens lens   (easter eggs; opt-in by invocation)
 
 flags (scan): --json · --no-cache · --sarif (SARIF 2.1.0 fence) · --osv or
 osv:true (OPT-IN network enrichment via OSV.dev; findings tagged enriched) ·
@@ -898,6 +906,218 @@ def _verb_diff(
 
 
 # ---------------------------------------------------------------------------
+# map · autopsy · bones · self-scan verbs (Phase 6; §11.2 + SPEC §16)
+# ---------------------------------------------------------------------------
+
+
+def _chat_soft_budget(view: PluginContextView | None) -> int | None:
+    """Effective soft budget from the pre-reserved chat_budget_chars key.
+
+    Clamping happens in the renderers (hard ceiling stays normative at
+    CHAT_HARD_BUDGET); cached artifacts keep the budget they were rendered
+    under — documented courtesy-setting semantics, DECISIONS D-056.
+    """
+    from .fun import _setting
+
+    raw = _setting(view, "chat_budget_chars")
+    return int(raw) if isinstance(raw, int) and raw > 0 else None
+
+
+def _verb_map(
+    args: list[str], *, view: PluginContextView, sink: dict[str, Any] | None = None
+) -> str:
+    """``/lens map <name|path>`` — SkillIR tree view (§11.2).
+
+    Runs ONE bounded pipeline pass inline (same discipline as diff's fresh
+    arm: pull verbs may scan synchronously; only ``scan`` is queue-first).
+    Baselines fold in so suppressed findings neither render nor count as
+    observed capabilities. Provenance renders annotation-only (D-PROV).
+    """
+    positional = [a for a in args if not a.startswith("--")]
+    unknown_flags = [a for a in args if a.startswith("--") and a != "--plain"]
+    if unknown_flags:
+        return _usage_line(offender=unknown_flags[0])
+    if len(positional) != 1:
+        return "usage: /lens map <name|path> — /lens help"
+
+    target_path, display_name = resolve_target(positional[0])
+    if target_path is None:
+        return fast_line_fail(name=display_name, reason=f"unresolvable target: {positional[0]}")
+
+    from .engines import ScanDeadlineBreach, scan_bundle
+    from .mapview import render_map_chat
+    from .report import build_report
+
+    start = time.monotonic()
+    try:
+        # ``home`` feeds ONLY the identity annotation (categorized-vs-flat
+        # decided against $HERMES_HOME/skills, D-PROV-safe): scores, hashes,
+        # and findings are byte-identical with or without it. Map is the one
+        # surface whose §11.2 contract names the categorized layout.
+        result = scan_bundle(
+            target_path, deadline=_deadline_from_start(start), home=hermes_home()
+        )
+        baseline_records, _suffix = _baseline_state(view, target_path)
+        envelope = build_report(result, baseline_entries=baseline_records, report_date=_today())
+    except ScanDeadlineBreach:
+        return fast_line_fail(
+            name=display_name,
+            reason=f"internal scan deadline ({int(INTERNAL_SCAN_DEADLINE_SECONDS)}s) exceeded",
+        )
+    except PolicyError:
+        raise  # config seam ⇒ surface lane decides (notice / exit 2)
+    except Exception as exc:  # noqa: BLE001 — handler never raises into the host
+        logger.exception("/lens map failed")
+        reason_text = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+        return fast_line_fail(name=display_name, reason=f"unreadable target: {reason_text}")
+
+    chat_render = render_map_chat(
+        envelope,
+        result.ir,
+        plugin_data_dir=view.plugin_data_dir(),
+        soft_budget=_chat_soft_budget(view),
+    )
+    if sink is not None:
+        # §12.1 lane split: the CLI prints the Rich-style box panel (then
+        # strips it itself under --plain/NO_COLOR); the slash lane keeps the
+        # fenced collapsed form. One pipeline pass feeds both renderers.
+        from .mapview import render_map_panel
+
+        sink["cli_text"] = render_map_panel(envelope, result.ir)
+    return chat_render
+
+
+def _verb_autopsy(args: list[str], *, view: PluginContextView, cache: FastPathCache) -> str:
+    """``/lens autopsy <name> [--voice clinical|microscopy]`` (F-1, §16).
+
+    Prefers the latest cached report for *name* (pull channel); falls back
+    to one bounded inline pass when nothing is cached. Voice resolution:
+    kill-switch > --voice flag > ``voice`` setting > clinical default.
+    Deterministic templates ONLY — no LLM, no randomness (FUN.md Law 3).
+    """
+    rest, voice_flag, voice_errors = _split_flag(args, "--voice")
+    if voice_errors:
+        return f"lens fail autopsy · {voice_errors[0]}"
+    positional = [a for a in rest if not a.startswith("--")]
+    unknown_flags = [a for a in rest if a.startswith("--") and a != "--plain"]
+    if unknown_flags:
+        return _usage_line(offender=unknown_flags[0])
+    if len(positional) != 1:
+        return (
+            "usage: /lens autopsy <name> [--voice clinical|microscopy] — voices are "
+            "opt-in; clinical (default) stays sober; noir is deferred (HQ O4)"
+        )
+    from .fun import render_autopsy, resolve_voice, validate_voice_choice
+
+    choice_error = validate_voice_choice(voice_flag)
+    if choice_error:
+        return f"lens fail autopsy · {choice_error}"
+    voice, voice_notice = resolve_voice(view, voice_flag)
+
+    name = positional[0]
+    import json as _json
+
+    entry = cache.latest_by_name(name)
+    envelope: dict[str, Any] | None = None
+    if entry is not None and entry.envelope_json:
+        try:
+            loaded = _json.loads(entry.envelope_json)
+            envelope = loaded if isinstance(loaded, dict) else None
+        except ValueError:
+            envelope = None
+    if envelope is None:
+        target_path, display_name = resolve_target(name)
+        if target_path is None:
+            return fast_line_fail(name=name, reason=f"unresolvable target: {name}")
+        envelope = _fresh_envelope(view=view, cache=cache, target_path=target_path)
+        if envelope is None:
+            return fast_line_fail(name=name, reason="autopsy rescan failed — see logs")
+
+    body = render_autopsy(
+        envelope,
+        voice=voice,
+        plugin_data_dir=view.plugin_data_dir(),
+        soft_budget=_chat_soft_budget(view),
+    )
+    return f"{voice_notice}\n{body}" if voice_notice else body
+
+
+def _verb_bones(args: list[str], *, view: PluginContextView) -> str:  # noqa: ARG001
+    """``/lens bones [target]`` — anatomical chart of a module tree (F-6).
+
+    Zero args charts Skill Lens itself (the instrument examined by itself);
+    a target argument charts that bundle's tree instead. One fenced block,
+    ≤1900 chars by construction — the format every chunker preserves.
+    Opt-in by invocation (hidden verb); read-only; exit 0 like anything else.
+    """
+    positional = [a for a in args if not a.startswith("--")]
+    unknown_flags = [a for a in args if a.startswith("--")]
+    if unknown_flags:
+        return _usage_line(offender=unknown_flags[0])
+    from .fun import BONES_BUDGET, bones_for_tree, self_scan_target
+
+    if positional:
+        target_path, display_name = resolve_target(positional[0])
+        if target_path is None:
+            return fast_line_fail(name=display_name, reason=f"unresolvable target: {positional[0]}")
+        from .ingest import DEFAULT_CEILINGS, load_bundle
+
+        try:
+            ir = load_bundle(target_path, ceilings=DEFAULT_CEILINGS)
+        except Exception as exc:  # noqa: BLE001 — degrade to a D-line
+            logger.exception("/lens bones ingest failed")
+            reason_text = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+            return fast_line_fail(name=display_name, reason=f"unreadable target: {reason_text}")
+        art = bones_for_tree(str(ir.identity.name), target_path)
+    else:
+        art = bones_for_tree("skill_lens", self_scan_target())
+    inner = art[: BONES_BUDGET - 8]
+    return f"```\n{inner}\n```\n"
+
+
+def _verb_self_scan(args: list[str], *, view: PluginContextView) -> str:  # noqa: ARG001
+    """``/lens lens`` — Skill Lens scans its own codebase (F-6 twin).
+
+    Dogfooding pressure disguised as a gag: real pipeline over a pyc-free
+    mirror of the package (bytecode caches regenerate out-of-band and would
+    move the hash — DETERMINISM LAW), sober-formatted grade line, gag tail
+    only when nothing CRITICAL is active. Exit codes stay boring (0).
+    """
+    leftovers = [a for a in args if a != "--plain"]
+    if leftovers:
+        return _usage_line(offender=leftovers[0])
+    import shutil as _shutil
+
+    from .engines import ScanDeadlineBreach, scan_bundle
+    from .fun import render_self_scan, self_scan_mirror
+    from .report import build_report
+
+    mirror = self_scan_mirror()
+    try:
+        start = time.monotonic()
+        try:
+            result = scan_bundle(mirror, deadline=_deadline_from_start(start))
+            envelope = build_report(result)
+        except ScanDeadlineBreach:
+            return fast_line_fail(
+                name="self-scan",
+                reason=f"internal scan deadline ({int(INTERNAL_SCAN_DEADLINE_SECONDS)}s) exceeded",
+            )
+        except Exception as exc:  # noqa: BLE001 — never raise into the host
+            logger.exception("self-scan failed")
+            reason_text = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+            return fast_line_fail(name="self-scan", reason=f"unreadable target: {reason_text}")
+    finally:
+        _shutil.rmtree(mirror, ignore_errors=True)
+    # The mirror's temp dirname must never leak into the render identity.
+    display = dict(envelope)
+    target = dict(display.get("target") or {})
+    target["name"] = "skill_lens"
+    display["target"] = target
+    return render_self_scan(display)
+
+
+# ---------------------------------------------------------------------------
 # Usage / errors
 # ---------------------------------------------------------------------------
 
@@ -1076,11 +1296,7 @@ def _verb_rules(
         body = "\n".join(report.lines)
         if report.status == "pass":
             return f"{head}\n{body}"
-        prefix = (
-            "lens fail · rule-pack signature REJECTED"
-            if report.status == "fail"
-            else head
-        )
+        prefix = "lens fail · rule-pack signature REJECTED" if report.status == "fail" else head
         return f"{prefix}\n{body}"
 
     target = Path(positional[0])
@@ -1272,6 +1488,10 @@ def dispatch_verb(
         result = _verb_scan(args, view=view, cache=cache, jobs=manager, sink=sink)
     elif verb == "report":
         return _verb_report(args, cache=cache, jobs=manager, sink=sink)
+    elif verb == "map":
+        result = _verb_map(args, view=view, sink=sink)
+    elif verb == "autopsy":
+        result = _verb_autopsy(args, view=view, cache=cache)
     elif verb == "baseline":
         result = _verb_baseline(args, view=view, cache=cache)
     elif verb in ("explain-rules", "explain"):
@@ -1291,6 +1511,13 @@ def dispatch_verb(
     elif verb == "doctor":
         # §11.9 nine-check engine: operational surface — no pull banner.
         return _verb_doctor(args, view=view, sink=sink)
+    elif verb == "bones":
+        # F-6 easter egg (hidden): opt-in by invocation; gags carry no pull
+        # banner — a chart interrupted by queue bookkeeping isn't funny.
+        return _verb_bones(args, view=view)
+    elif verb == "lens":
+        # F-6 self-scan twin (hidden): same no-banner rule as bones.
+        return _verb_self_scan(args, view=view)
     else:
         return _usage_line(offender=verb)
     banner = manager.banner_line()
@@ -1335,7 +1562,10 @@ def register_slash(
     """
     owned_cache = cache if cache is not None else shared_cache()
     description = "Skill Lens — deterministic security reports for skill bundles (advisory)"
-    args_hint = "scan|report|baseline|explain-rules|diff|hub|watch|help · flags: --json --no-cache"
+    args_hint = (
+        "scan|report|map|autopsy|baseline|explain-rules|diff|hub|watch|help"
+        " · flags: --json --no-cache --voice"
+    )
     handle = make_handler(view, owned_cache)
     registration = view.register_command(
         SLASH_COMMAND,

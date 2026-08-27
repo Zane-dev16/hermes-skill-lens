@@ -233,11 +233,22 @@ def _finding_block(finding: Mapping[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def spoiler_wrap(text: str) -> str:
+    """Discord spoiler wrap ``||…||`` (§11.3; opt-in via discord_spoilers).
+
+    Courtesy, not redaction (G4 applies underneath): wrapped content stays
+    fully present in every machine format — only chat prose hides it behind
+    a tap. Default OFF everywhere.
+    """
+    return f"||{text}||"
+
+
 def render_chat_compact(
     envelope: Mapping[str, Any],
     *,
     plugin_data_dir: Path | str | None = None,
     worst_count: int = WORST_N_DEFAULT,
+    spoilers: bool = False,
 ) -> str:
     """Collapsed fenced chat render (never raises; never emits ANSI).
 
@@ -246,17 +257,21 @@ def render_chat_compact(
     pointer only. When *plugin_data_dir* is supplied, every degraded render
     persists the FULL text under ``<dir>/reports/<name>-<hash8>.txt`` and
     appends the file pointer line.
+
+    *spoilers* (default False) wraps finding detail rows in Discord spoiler
+    markers — an opt-in display courtesy that changes chat bytes only;
+    machine formats and default renders are untouched.
     """
-    body = _chat_body(envelope, worst_count)
+    body = _chat_body(envelope, worst_count, spoilers=spoilers)
     pointer: str | None = None
 
     if len(body) > CHAT_SOFT_BUDGET:
         pointer = _persist_full(envelope, plugin_data_dir)
-        body = _chat_body(envelope, WORST_N_OVER_BUDGET, extra_pointer=pointer)
+        body = _chat_body(envelope, WORST_N_OVER_BUDGET, extra_pointer=pointer, spoilers=spoilers)
 
     if len(body) > CHAT_HARD_BUDGET:
         pointer = pointer or _persist_full(envelope, plugin_data_dir)
-        body = _chat_body(envelope, 0, extra_pointer=pointer)
+        body = _chat_body(envelope, 0, extra_pointer=pointer, spoilers=spoilers)
 
     return body
 
@@ -266,6 +281,7 @@ def _chat_body(
     worst_count: int,
     *,
     extra_pointer: str | None = None,
+    spoilers: bool = False,
 ) -> str:
     score = envelope.get("score") or {}
     rule_pack = envelope.get("rule_pack") or {}
@@ -289,7 +305,13 @@ def _chat_body(
     if active:
         finding_lines.append(f"findings: {counts_phrase(envelope)}")
         for finding in worst_findings(envelope, worst_count):
-            finding_lines.extend(_finding_block(finding))
+            block = _finding_block(finding)
+            if spoilers and len(block) > 1:
+                # Wrap ONLY the evidence detail row (location · capability ·
+                # confidence); the severity/rule head stays visible so the
+                # reader knows there is something behind the tap.
+                block[1] = "      " + spoiler_wrap(block[1].lstrip())
+            finding_lines.extend(block)
         hidden = len(active) - min(worst_count, len(active))
         if hidden > 0:
             finding_lines.append(f"… {hidden} more in the full report")
@@ -332,6 +354,8 @@ def _persist_full(envelope: Mapping[str, Any], plugin_data_dir: Path | str | Non
     Overflow artifacts carry the CANONICAL envelope (machine-auditable),
     matching the §11.3 "reports persist under <plugin-data>/lens/reports/"
     contract. Unwritable dirs degrade to an inline notice instead of a path.
+    Filename keeps the HISTORICAL ``<stem>-<hash8>.txt`` shape — pinned by
+    the D-032 tests; newer surfaces namespace via :func:`persist_full_text`.
     """
     stem = _safe_filename_stem(str((envelope.get("target") or {}).get("name", "report")))
     shard = report_hash8(envelope)
@@ -345,6 +369,36 @@ def _persist_full(envelope: Mapping[str, Any], plugin_data_dir: Path | str | Non
         return str(path)
     except OSError:
         return "(report too large for chat; full report could not be persisted)"
+
+
+def persist_full_text(
+    plugin_data_dir: Path | str | None,
+    kind: str,
+    envelope: Mapping[str, Any],
+    text: str,
+    *,
+    shard: str | None = None,
+) -> str:
+    """Persist an overflow artifact (any human surface) and return its path.
+
+    Shared by the personality/map surfaces (autopsy narratives, map trees):
+    same directory discipline as :func:`_persist_full` — sanitized stem,
+    hash8 shard for uniqueness, inline-notice degradation when unwritable.
+    *kind* namespaces the artifact (``report``/``map``/``autopsy``).
+    """
+    stem = _safe_filename_stem(str((envelope.get("target") or {}).get("name", kind)))
+    if shard is None:
+        shard = report_hash8(envelope)
+    if plugin_data_dir is None:
+        return f"(render too large for chat; run /lens scan --json — {kind} overflow)"
+    reports_dir = Path(plugin_data_dir) / "reports"
+    try:
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        path = reports_dir / f"{stem}-{kind}-{shard}.txt"
+        path.write_text(text, encoding="utf-8", newline="\n")
+        return str(path)
+    except OSError:
+        return f"(render too large for chat; {kind} could not be persisted)"
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +524,9 @@ __all__ = [
     "fast_line_ok",
     "fast_line_scan_queued",
     "fast_line_skip",
+    "persist_full_text",
     "render_chat_compact",
     "render_terminal_panel",
+    "spoiler_wrap",
     "worst_findings",
 ]
