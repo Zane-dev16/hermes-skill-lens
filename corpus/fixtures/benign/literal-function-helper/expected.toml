@@ -1,0 +1,3 @@
+# Benign lookalike for D-046 gap (b): literal-only Function/new-Function
+# bodies stay silent in BOTH lanes (non-literal law: design §3.4).
+category = "devtools"

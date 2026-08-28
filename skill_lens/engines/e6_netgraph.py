@@ -232,6 +232,26 @@ _NET_HOST_GATE_RE = re.compile(r"://|\d\.\d|onion", re.IGNORECASE)
 #: so a plain substring chain is an exact necessary condition.
 _SEND_SINK_GATE_LITERALS = ("curl", "wget", "requests", "httpx", "fetch")
 
+# Multi-line send-sink window (D-046 gap a) — ADDITIVE tier 2 behind the
+# untouched per-line tier 1. Windows open only at starter lines and consumed
+# lines are skipped, so total windowed text is O(file size); the hard caps
+# below bound every window's work (worst case a false negative, never
+# unbounded scanning, never an extra line).
+_WINDOW_MAX_LINES = 8  # hard line cap per window
+_WINDOW_MAX_CHARS = 400  # hard character cap (sum of raw line lengths)
+
+#: Starters: a fetch-family call opener, or a shell downloader.
+_WINDOW_JS_START_RE = re.compile(r"\bfetch\s*\(")
+_WINDOW_SHELL_START_RE = re.compile(r"\b(?:curl|wget)\b")
+
+#: Tier-2 predicates (applied to the window text AFTER folding shell
+#: continuations: ``\\\n`` -> " "). JS keeps the existing sink law verbatim:
+#: a fetch call whose window carries body: or method: POST/PUT.
+_JS_WINDOW_BODY_RE = re.compile(r"(?:body\s*:|method\s*:\s*['\"](?:POST|PUT)['\"])")
+_JS_WINDOW_HEAD_RE = re.compile(r"\bfetch\s*\(")
+#: curl/wget: the EXISTING data-carrying vocabulary, applied to folded text.
+_SHELL_WINDOW_RES: tuple[re.Pattern[str], ...] = (_CURL_SEND_RE, _WGET_SEND_RE)
+
 _SNIPPET_MAX = 160
 
 _RAW_IP_CLASS = "raw-ip"
@@ -391,6 +411,78 @@ def line_has_send_sink(line: str) -> bool:
     return any(regex.search(line) for regex in SEND_SINK_RES)
 
 
+def _fold_window(window: list[str]) -> str:
+    """Fold shell continuations (``\\`` at EOL) into single-space joins."""
+    return " ".join(line[:-1] if line.endswith("\\") else line for line in window).strip()
+
+
+def _expand_sink_window(lines: list[str], i: int) -> tuple[list[str], int]:
+    """Deterministic window over *lines* starting at index *i* (pure).
+
+    Returns ``(window_lines, next_index)``. JS starters (fetch calls) expand
+    over a paren-depth walk from the starter's own ``(``; the window closes
+    at the first line where depth returns to 0 (clamped >= 0). Shell starters
+    (curl/wget) extend exactly over backslash-continuation lines. Hard caps
+    (8 lines / 400 chars) truncate deterministically — a truncated window is
+    what the predicate sees (false-negative-bounded, never unbounded work).
+    """
+    starter = lines[i]
+    window = [starter]
+    chars = len(starter)
+    js_match = _WINDOW_JS_START_RE.search(starter)
+    if js_match is not None:
+        open_pos = starter.find("(", js_match.start())
+        if open_pos == -1:
+            return window, i + 1  # no call opener: window closes on its own line
+        depth = starter[open_pos:].count("(") - starter[open_pos:].count(")")
+        j = i + 1
+        while (
+            depth > 0
+            and j < len(lines)
+            and len(window) < _WINDOW_MAX_LINES
+            and chars < _WINDOW_MAX_CHARS
+        ):
+            line = lines[j]
+            depth = max(0, depth + line.count("(") - line.count(")"))
+            window.append(line)
+            chars += len(line)
+            j += 1
+        return window, j
+    # Shell starter: extend exactly over backslash-continuation lines.
+    j = i
+    while (
+        lines[j].rstrip().endswith("\\")
+        and j + 1 < len(lines)
+        and len(window) < _WINDOW_MAX_LINES
+        and chars < _WINDOW_MAX_CHARS
+    ):
+        j += 1
+        line = lines[j]
+        window.append(line)
+        chars += len(line)
+    return window, j + 1
+
+
+def _window_send_predicate(window: list[str]) -> bool:
+    """Tier-2 send-sink law over one folded window (same vocabularies as tier 1)."""
+    text = _fold_window(window)
+    if not any(literal in text for literal in _SEND_SINK_GATE_LITERALS):
+        return False  # necessary-condition gate: no sink regex can match (PERF)
+    if _WINDOW_JS_START_RE.search(window[0]):
+        return bool(_JS_WINDOW_HEAD_RE.search(text) and _JS_WINDOW_BODY_RE.search(text))
+    return any(regex.search(text) for regex in _SHELL_WINDOW_RES)
+
+
+def _resolve_host_class(line_classes: list[str], file_classes: list[str]) -> str:
+    """Best NET012 class over the sink's own hosts, then the file, then weak."""
+    host_class = next((c for c in line_classes if c in NET012_CLASSES), None)
+    if host_class is None:
+        host_class = next((c for c in file_classes if c in NET012_CLASSES), None)
+    if host_class is None:
+        host_class = "external-host"
+    return host_class
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -492,35 +584,85 @@ class NetgraphEngine:
                     for class_name in classify_host(host):
                         if class_name not in file_classes:
                             file_classes.append(class_name)
-            for lineno, line in enumerate(lines, start=1):
-                if not line_has_send_sink(line):
-                    continue
-                line_classes: list[str] = []
-                for _raw, host in extract_url_hosts(line):
-                    line_classes.extend(c for c in classify_host(host) if c not in line_classes)
-                host_class = next((c for c in line_classes if c in NET012_CLASSES), None)
-                if host_class is None:
-                    host_class = next((c for c in file_classes if c in NET012_CLASSES), None)
-                if host_class is None:
-                    host_class = "external-host"
-                confidence = (
-                    rule.confidence_default
-                    if host_class != "external-host"
-                    else SUSPECTED_CORRELATION_CONFIDENCE
+            # Index walk (D-046 gap a): tier 1 stays the unchanged per-line
+            # path for EVERY line (requests.post and friends are not window
+            # starters — the output-identity bar requires this). Tier 2 is
+            # additive: only starter lines whose window spans >1 line, only
+            # when NO line inside the window fired tier 1 (no double-fire).
+            i = 0
+            total = len(lines)
+            while i < total:
+                line = lines[i]
+                is_starter = bool(
+                    _WINDOW_JS_START_RE.search(line) or _WINDOW_SHELL_START_RE.search(line)
                 )
-                findings.append(
-                    _correlation_finding(
-                        rule,
-                        record.path,
-                        lineno,
-                        line,
-                        host_class,
-                        source_kind,
-                        declared,
-                        tags,
-                        confidence=confidence,
+                nxt = i + 1
+                window: list[str] | None = None
+                if is_starter:
+                    window, nxt = _expand_sink_window(lines, i)
+                if line_has_send_sink(line):
+                    # Tier 1 — the previous per-line path, byte-identical.
+                    line_classes: list[str] = []
+                    for _raw, host in extract_url_hosts(line):
+                        line_classes.extend(c for c in classify_host(host) if c not in line_classes)
+                    host_class = _resolve_host_class(line_classes, file_classes)
+                    confidence = (
+                        rule.confidence_default
+                        if host_class != "external-host"
+                        else SUSPECTED_CORRELATION_CONFIDENCE
                     )
-                )
+                    findings.append(
+                        _correlation_finding(
+                            rule,
+                            record.path,
+                            i + 1,
+                            line,
+                            host_class,
+                            source_kind,
+                            declared,
+                            tags,
+                            confidence=confidence,
+                        )
+                    )
+                    i = nxt  # consume the window; continuation lines are not re-scanned
+                    continue
+                if (
+                    window is not None
+                    and len(window) > 1
+                    and _window_send_predicate(window)
+                    and not any(line_has_send_sink(w) for w in window)
+                ):
+                    # Tier 2 — additive multi-line window; emits at the sink
+                    # START line with the same Location shape as tier 1.
+                    # Fingerprint still binds (host-class, source-kind).
+                    window_line_classes: list[str] = []
+                    for wline in window:
+                        for _raw, host in extract_url_hosts(wline):
+                            window_line_classes.extend(
+                                c for c in classify_host(host) if c not in window_line_classes
+                            )
+                    host_class = _resolve_host_class(window_line_classes, file_classes)
+                    confidence = (
+                        rule.confidence_default
+                        if host_class != "external-host"
+                        else SUSPECTED_CORRELATION_CONFIDENCE
+                    )
+                    findings.append(
+                        _correlation_finding(
+                            rule,
+                            record.path,
+                            i + 1,
+                            line,
+                            host_class,
+                            source_kind,
+                            declared,
+                            tags,
+                            confidence=confidence,
+                        )
+                    )
+                    i = nxt
+                    continue
+                i += 1
         return findings
 
 

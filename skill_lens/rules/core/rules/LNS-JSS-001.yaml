@@ -33,5 +33,7 @@ detection: >-
 fixtures:
   positive:
     - corpus/fixtures/malicious/js-stage-beacon
+    - corpus/fixtures/malicious/bare-function-loader
   negative:
     - corpus/fixtures/benign/js-release-helper
+    - corpus/fixtures/benign/literal-function-helper

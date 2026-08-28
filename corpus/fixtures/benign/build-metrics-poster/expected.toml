@@ -1,0 +1,4 @@
+# Benign lookalike for D-046 gap (a): a multi-line fetch POST whose body is
+# only literal build metadata — no credential source in the file, so the
+# tier-2 window must stay silent (silence proof: design §3.2).
+category = "devtools"

@@ -33,5 +33,7 @@ detection: >-
 fixtures:
   positive:
     - corpus/fixtures/malicious/exfil-env-paste
+    - corpus/fixtures/malicious/multiline-fetch-exfil
   negative:
     - corpus/fixtures/benign/declared-notes-upload
+    - corpus/fixtures/benign/build-metrics-poster

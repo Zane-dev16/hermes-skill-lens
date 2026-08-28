@@ -1,0 +1,15 @@
+# D-046 gap (a): multi-line fetch POST+body never paired for LNS-NET-011
+# under the single-line tier-1 regexes; the tier-2 bounded window closes it.
+category = "tools"
+
+[[expect_rules]]
+rule_id = "LNS-NET-011"
+severity_band = ["CRITICAL"]
+
+[[expect_rules]]
+rule_id = "LNS-NET-012"
+severity_band = ["MEDIUM"]
+
+[[expect_rules]]
+rule_id = "LNS-JSS-004"
+severity_band = ["HIGH"]

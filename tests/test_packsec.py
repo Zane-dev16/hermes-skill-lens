@@ -157,7 +157,7 @@ def test_core_signature_passes_on_committed_tree() -> None:
 
 def test_tampered_rule_file_is_rejected_loudly(tmp_path: Path) -> None:
     """THE Phase-5 tamper law: flipping a byte in ANY pack file ⇒ FAIL."""
-    if not (REPO_ROOT / "keys" / "core-pack-2026.08.7.sig").is_file():
+    if not (REPO_ROOT / "keys" / "core-pack-2026.08.8.sig").is_file():
         pytest.skip("committed signature not present in this tree")
     dst = _mirror_tree(tmp_path)
     target = dst / "rules" / "LNS-NET-011.yaml"

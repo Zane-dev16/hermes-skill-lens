@@ -923,6 +923,35 @@ def _scan_file_ast(builder: _FindingBuilder, text: str, tree: Any) -> list[Findi
             if finding is not None:
                 findings.append(finding)
 
+        # --- LNS-JSS-001 bare-call Function constructor (D-046 gap b) ---
+        # ``new Function(x)`` is a new_expression with NO nested call_expression
+        # in the tree-sitter-javascript grammar, so the constructions loop
+        # above owns it and this branch never double-fires. Member receivers
+        # (x.Function(...) / Function.bind(...)) are member_expression nodes,
+        # excluded by the identifier type check — mirrors the degraded
+        # (?<![\w.$]) guard. Non-literal law mirrors the new-Function branch
+        # exactly: _is_pure_literal over positional args; zero-arg Function()
+        # stays silent.
+        func_node = call_node.child_by_field_name("function")
+        if (
+            func_node is not None
+            and func_node.type == "identifier"
+            and _node_text(func_node, source) == "Function"
+        ):
+            positional = _args(call_node, source)
+            if positional and any(not _is_pure_literal(arg) for arg in positional):
+                finding = builder.build(
+                    "LNS-JSS-001",
+                    lineno,
+                    end_lineno,
+                    snippet,
+                    "function-constructor",
+                    "Dynamic execution sink (Function constructor) compiles "
+                    "runtime-derived input into unreviewable code.",
+                )
+                if finding is not None:
+                    findings.append(finding)
+
         # --- LNS-JSS-003 child_process shell sinks ---
         shell_token: str | None = None
         if lowered == "child_process.exec":
@@ -1009,6 +1038,11 @@ def _scan_file_ast(builder: _FindingBuilder, text: str, tree: Any) -> list[Findi
 
 _DEG_EVAL_RE = re.compile(r"(?<![\w.$])eval\s*\(")
 _DEG_FUNCTION_CTOR_RE = re.compile(r"\bnew\s+Function\s*\(")
+#: Bare-call Function (D-046 gap b): the (?<![\w.$]) guard excludes
+#: x.Function( / myFunction( / $Function( — parity with the AST identifier
+#: type check. The \bnew\s*$ prefix check (below) leaves new Function( to the
+#: existing ctor lane.
+_DEG_FUNCTION_CALL_RE = re.compile(r"(?<![\w.$])Function\s*\(")
 _DEG_VM_RE = re.compile(r"\brunIn(?:This|New|Async)?Context\s*\(")
 _DEG_DECODE_RE = re.compile(
     r"(?<![\w.$])atob\s*\("
@@ -1179,6 +1213,26 @@ def _deg_function_ctor_dynamic(stripped: str) -> bool:
     return False
 
 
+def _deg_function_call_dynamic(stripped: str) -> bool:
+    """Bare ``Function(...)`` with at least one non-literal-looking argument.
+
+    Same quoted-literal carve-out and ``${``-dynamic rule as the new-lane
+    helper; ``new Function(`` sites are skipped (the ctor lane owns them).
+    """
+    for match in _DEG_FUNCTION_CALL_RE.finditer(stripped):
+        prefix = stripped[: match.start()]
+        if re.search(r"\bnew\s*$", prefix):
+            continue  # new-Function lane already owns this site
+        blob = stripped[match.end() :].split(")")[0]
+        parts = [part.strip() for part in blob.split(",")]
+        if any(
+            part and ("${" in part or not (part[0] in "\"'`" and part[-1:] == part[0]))
+            for part in parts
+        ):
+            return True
+    return False
+
+
 def _deg_eval_dynamic(stripped: str) -> bool:
     """``eval(...)`` heuristic: quoted-first-argument lines stay silent."""
     match = _DEG_EVAL_RE.search(stripped)
@@ -1323,6 +1377,15 @@ def _scan_file_lines(builder: _FindingBuilder, text: str) -> list[Finding]:
                 "executes unreviewable code (line-heuristic).",
             )
         if _deg_function_ctor_dynamic(stripped):
+            emit(
+                "LNS-JSS-001",
+                token,
+                stripped,
+                "function-constructor",
+                "Dynamic execution sink (Function constructor) compiles "
+                "runtime-derived input into unreviewable code (line-heuristic).",
+            )
+        if _deg_function_call_dynamic(stripped):
             emit(
                 "LNS-JSS-001",
                 token,

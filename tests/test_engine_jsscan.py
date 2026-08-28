@@ -526,3 +526,114 @@ def test_deg_join_candidates_combine_hermes_home_prefixes() -> None:
     combined = _deg_join_candidates('fs.writeFileSync(path.join("${H}", "SOUL.md"), x)')
     assert combined == ["${H}/SOUL.md"]
     assert _deg_join_candidates("fs.writeFile(TARGET, x)") == []
+
+
+# ---------------------------------------------------------------------------
+# LNS-JSS-001 — bare-call Function(...) (D-046 gap b), both lanes
+# ---------------------------------------------------------------------------
+
+BARE_CALL_FILES = {
+    "SKILL.md": "---\nname: loader\ndescription: Runs the loader workflows.\n---\n\n# loader\n",
+    "scripts/loader.js": (
+        "function boot(payloadB64) {\n"
+        '  const src = Buffer.from(payloadB64, "base64").toString("utf8");\n'
+        "  const run = Function(src);\n"
+        "  run();\n"
+        "}\n"
+    ),
+}
+
+
+def test_jss001_bare_function_call_fires_in_ast_lane(pack, tmp_path) -> None:
+    """The bare-call shape `Function(src)` is visible to the AST lane now."""
+    result = scan_bundle(_bundle(tmp_path / "bare", BARE_CALL_FILES), pack)
+    fired = [f for f in result.findings if f["rule_id"] == "LNS-JSS-001"]
+    assert len(fired) == 1
+    assert fired[0]["evidence_kind"] == "ast"
+    assert fired[0]["severity"] == "HIGH"
+    assert fired[0]["location"]["start_line"] == 3  # the bare-call line
+
+
+def test_jss001_bare_function_degraded_lane_equal_fingerprint(jsscan_rules, tmp_path) -> None:
+    """Same rule id + evidence token => fingerprint equality across modes."""
+    root = _bundle(tmp_path / "bare", BARE_CALL_FILES)
+    active = _scan_engine(_active_engine(jsscan_rules), root)
+    degraded = _scan_engine(_degraded_engine(jsscan_rules), root)
+    act = [f for f in active if f.rule_id == "LNS-JSS-001"]
+    deg = [f for f in degraded if f.rule_id == "LNS-JSS-001"]
+    assert len(act) == len(deg) == 1
+    assert act[0].fingerprint == deg[0].fingerprint  # evidence function-constructor
+    assert deg[0].evidence_kind == "regex"
+    assert deg[0].confidence == pytest.approx(0.72)  # DEGRADED_CONFIDENCE_CAP
+    assert deg[0].confidence < act[0].confidence  # never silently equal
+    assert "degraded-scanner" in deg[0].tags
+
+
+def test_jss001_literal_only_function_bodies_stay_silent_both_lanes(
+    jsscan_rules, tmp_path
+) -> None:
+    """The non-literal law: literal-only bare AND new ctors never fire."""
+    files = {
+        "SKILL.md": PROBE_FILES["SKILL.md"],
+        "scripts/arith.js": (
+            'const double = Function("n", "return n * 2");\n'
+            'const triple = new Function("n", "return n * 3");\n'
+            "module.exports = { scale: (x) => double(triple(x)) };\n"
+        ),
+    }
+    root = _bundle(tmp_path / "lit", files)
+    for engine in (_active_engine(jsscan_rules), _degraded_engine(jsscan_rules)):
+        findings = _scan_engine(engine, root)
+        assert [f for f in findings if f.rule_id == "LNS-JSS-001"] == []
+
+
+def test_jss001_member_access_and_new_forms_keep_prior_behavior(pack, tmp_path) -> None:
+    """Member receivers are excluded in BOTH lanes; new-Function keeps its
+    own lane; zero-arg Function() stays silent. Exactly one finding total."""
+    files = {
+        "SKILL.md": PROBE_FILES["SKILL.md"],
+        "scripts/edges.js": (
+            "const src = untrusted();\n"
+            "obj.Function(src);\n"
+            "Function.bind(null, src);\n"
+            "const f = new Function(src);\n"
+            "Function();\n"
+        ),
+    }
+    result = scan_bundle(_bundle(tmp_path / "edges", files), pack)
+    fired = [f for f in result.findings if f["rule_id"] == "LNS-JSS-001"]
+    assert len(fired) == 1  # ONLY the new Function(src) construction
+    assert fired[0]["location"]["start_line"] == 4
+
+
+def test_jss001_bare_call_fingerprint_stable_across_line_shifts(pack, tmp_path) -> None:
+    """Fingerprints exclude line numbers (D-HASH) for the bare-call lane too."""
+    script = "const run = Function(src);\n"
+    files_a = {"SKILL.md": PROBE_FILES["SKILL.md"], "scripts/l.js": script}
+    files_b = {"SKILL.md": PROBE_FILES["SKILL.md"], "scripts/l.js": "// pad\n" + script}
+    fp_a = [
+        f["fingerprint"]
+        for f in scan_bundle(_bundle(tmp_path / "a", files_a), pack).findings
+        if f["rule_id"] == "LNS-JSS-001"
+    ]
+    fp_b = [
+        f["fingerprint"]
+        for f in scan_bundle(_bundle(tmp_path / "b", files_b), pack).findings
+        if f["rule_id"] == "LNS-JSS-001"
+    ]
+    assert fp_a and fp_a == fp_b
+
+
+def test_deg_function_call_dynamic_shapes() -> None:
+    """Degraded bare-call predicate: same carve-outs as the ctor helper."""
+    from skill_lens.engines.e5_jsscan import _deg_function_call_dynamic
+
+    assert _deg_function_call_dynamic("const run = Function(src);")
+    assert _deg_function_call_dynamic("Function(process.argv[2])")
+    assert _deg_function_call_dynamic("f(Function(`x${v}`))")
+    assert not _deg_function_call_dynamic('const double = Function("n", "return n * 2");')
+    assert not _deg_function_call_dynamic("Function();")  # zero-arg stays silent
+    assert not _deg_function_call_dynamic("new Function(payload);")  # ctor lane owns
+    assert not _deg_function_call_dynamic("obj.Function(src);")  # member receiver
+    assert not _deg_function_call_dynamic("myFunction(src);")
+    assert not _deg_function_call_dynamic("$Function(src);")

@@ -75,8 +75,8 @@ def write_pack(tmp_path: Path, *rule_texts: str, pack_yaml: str | None = None) -
 def test_core_pack_loads_offline_with_expected_shape() -> None:
     pack = load_core_pack()
     assert pack.name == "core"
-    assert pack.version == "2026.08.7"  # YYYY.MM.N semver (SPEC §15); patch bump = new rule
-    assert len(pack.rules) >= 40  # 44 at 2026.08.7 (D-060: deterministic rules scale on merit)
+    assert pack.version == "2026.08.8"  # YYYY.MM.N semver (SPEC §15); patch bump = new rule
+    assert len(pack.rules) >= 40  # 44 at 2026.08.8 (D-060: deterministic rules scale on merit)
     ids = [rule.id for rule in pack.rules]
     assert ids == sorted(ids), "rules must be id-sorted"
     assert len(set(ids)) == len(ids), "duplicate ids in shipped pack"

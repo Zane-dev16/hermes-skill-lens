@@ -5,7 +5,28 @@
      semantics are SPEC §15: new rule = patch; weight/severity change =
      minor + rationale; deprecation ships >=2 minors before removal. -->
 
-Current version: **2026.08.7** · 44 rules
+Current version: **2026.08.8** · 44 rules
+
+## 2026.08.8 — 2026-08-28
+
+- D-046 gap (a): E6 netgraph LNS-NET-011 adds an additive bounded
+- multi-line send-sink window (8 lines / 400 chars hard caps) behind
+- the untouched per-line tier 1 — a multi-line fetch with method: POST
+- + body: now pairs with same-file credential sources; curl/wget
+- backslash continuations fold the same way. Necessary-condition gates
+- (D-049/D-056/D-061) intact; vectors A-G byte-exact.
+- D-046 gap (b): E5 jsscan LNS-JSS-001 fires on bare-call Function(x)
+- in BOTH lanes (AST identifier-callee branch; degraded regex with the
+- same (?<![\w.$]) guard and quoted-literal carve-out), evidence
+- token function-constructor unchanged so fingerprints match across
+- modes; new Function, member access, and literal-only bodies stay
+- silent. No new rules; no material (severity/weight/capability/engine/
+- evidence_kind/confidence_default) changes. Fixtures: malicious
+- multiline-fetch-exfil + bare-function-loader, benign
+- build-metrics-poster + literal-function-helper.
+
+Rationale:
+  - Close the D-046 detection gaps with zero material changes: E6 gains a bounded multi-line send-sink window (LNS-NET-011 tier 2) and E5 gains bare-call Function(...) detection in both lanes (LNS-JSS-001).
 
 ## 2026.08.7 — 2026-08-28
 

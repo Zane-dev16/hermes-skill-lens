@@ -1,0 +1,9 @@
+# D-046 gap (b): the bare-call Function(src) shape was invisible in BOTH E5
+# lanes (AST collected new_expression only; degraded regex required `new`).
+# JSS-002 stays silent on purpose: neither chain table knows bare `function`
+# as a sink (parity law, design §2.3).
+category = "devtools"
+
+[[expect_rules]]
+rule_id = "LNS-JSS-001"
+severity_band = ["HIGH"]
