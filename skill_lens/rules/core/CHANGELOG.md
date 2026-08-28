@@ -5,7 +5,25 @@
      semantics are SPEC §15: new rule = patch; weight/severity change =
      minor + rationale; deprecation ships >=2 minors before removal. -->
 
-Current version: **2026.08.6** · 41 rules
+Current version: **2026.08.7** · 44 rules
+
+## 2026.08.7 — 2026-08-28
+
+- Ship the three D-014-deferred rules (corpus breadth precondition met;
+- D-060): LNS-MAN-006 tag-spoof LOW static 0.90 (clause A reserved
+- impersonation tokens + clause B all-tags-divergent n>=3 padding;
+- category-name and bare-hermes tags are carve-outs), LNS-MAN-008
+- fallback-grooming MED dynamic 0.90 (fallback entry without a same-list
+- requires counterpart), LNS-SHL-007 env-source-to-send flow HIGH regex
+- 0.85 (E3-internal same-file source→sink pairing: dot-source/set -a/
+- export $(cat ...) of .env*/credential*/auth.json basenames, then a
+- variable-interpolating curl/wget send in the same shell region;
+- 0.70 unknown-var band; redirect reads/@file attaches stay NET-011's).
+- Fixtures: malicious tag-spoof-padder/fallback-groomer/env-source-exfil
+- + benign honest-multi-tag/honest-fallback/env-config-loader twins.
+
+Rationale:
+  - Ship the three D-014-deferred deterministic rules (LNS-MAN-006, LNS-MAN-008, LNS-SHL-007) per the D-060 owner ruling.
 
 ## 2026.08.6 — 2026-08-25
 

@@ -53,6 +53,7 @@ from .base import (
     claimed_capability_paths,
     iter_text_files,
 )
+from .e6_netgraph import _CURL_SEND_RE, _WGET_SEND_RE
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -69,6 +70,7 @@ RULE_IDS: tuple[str, ...] = (
     "LNS-SHL-004",
     "LNS-SHL-005",
     "LNS-SHL-006",
+    "LNS-SHL-007",
 )
 
 # ---------------------------------------------------------------------------
@@ -192,6 +194,31 @@ _SINK_RES: tuple[re.Pattern[str], ...] = (
     _SED_INPLACE_RE,
     _COPY_DEST_RE,
 )
+
+# -- LNS-SHL-007 — env-file source→send flow (D-014: correlation, not bare --
+# presence). Send vocabulary is IMPORTED from e6_netgraph so SHL-007 and
+# NET-011 never drift apart (established cross-engine import practice: e4/e5
+# already consume e3 internals; fingerprints bind the rule id so no
+# cross-engine collision is possible).
+
+#: Dot-source idiom: ``source <file>`` / ``. <file>``, optionally behind
+#: ``set -a`` (the ``&& `` satisfies the leading separator; ``set -a`` alone
+#: is NOT a source — the pair is one source event).
+_ENV_SOURCE_RE = re.compile(r"(?:^|[;&|]\s*)(?:source|\.)\s+([^\s;&|#]+)")
+#: Export-by-substitution idiom: ``export $(cat <file>)`` (the bare ``eval
+#: $(cat ...)`` form is SHL-002 territory and deliberately not matched here).
+_EXPORT_SUBST_RE = re.compile(r"\bexport\s+\$?\(\s*cat\s+([^)#\s;&|]+)")
+#: Shell variable interpolation / command substitution in send arguments.
+_VAR_INTERP_RE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*|\$\(")
+#: Fenced code blocks: opening fence with a shell language tag opens a shell
+#: region; any fence line closes. Unclosed fences extend to EOF (tolerant,
+#: matching heredoc handling).
+_FENCE_RE = re.compile(r"^\s*(?:```|~~~)\s*([A-Za-z0-9_+-]*)")
+_FENCE_LANGS = frozenset({"bash", "sh", "shell", "zsh"})
+
+#: Reduced-confidence band for unknown-variable env-adjacent source targets
+#: (§4 conservative treatment, SHL-004's 0.70 sibling).
+REDUCED_CONFIDENCE_ENV_SOURCE = 0.70
 
 
 @dataclass(frozen=True)
@@ -360,6 +387,7 @@ class ShellScanEngine:
             findings.extend(
                 _control_plane_findings(self._rules, record.path, sinks, blocks, claimed)
             )
+            findings.extend(_env_source_findings(self._rules, record.path, lines, claimed))
         findings.sort(key=_finding_sort_key)
         return findings
 
@@ -683,6 +711,151 @@ def _control_plane_findings(
                 extra_tags=extra_tags + (("escalated-critical",) if escalated else ()),
                 confidence=None,
                 effective_severity="CRITICAL" if escalated else None,
+            )
+        )
+    return out
+
+
+def _shell_regions(lines: list[str]) -> frozenset[int]:
+    """Line numbers inside fenced bash/sh blocks (SHL-007 region refinement).
+
+    Shell-suffixed files never call this (all lines count); non-shell text
+    restricts BOTH flow sides to fenced ``bash``/``sh`` blocks so a README
+    saying "run ``source .env`` first" plus a curl example cannot pair.
+    """
+    regions: set[int] = set()
+    inside = False
+    for lineno, line in enumerate(lines, start=1):
+        match = _FENCE_RE.match(line)
+        if match is not None:
+            inside = (not inside) and match.group(1).casefold() in _FENCE_LANGS
+            continue
+        if inside:
+            regions.add(lineno)
+    return frozenset(regions)
+
+
+def _env_source_kind(line: str) -> tuple[str | None, str]:
+    """First source event on *line* (fixed kind order: dot-source, then
+    export-substitution) as ``(kind, raw target)``; ``(None, "")`` when the
+    line carries no sourcing grammar."""
+    match = _ENV_SOURCE_RE.search(line)
+    if match is not None:
+        return "dot-source", match.group(1)
+    match = _EXPORT_SUBST_RE.search(line)
+    if match is not None:
+        return "export-substitution", match.group(1)
+    return None, ""
+
+
+def _envfile_target_class(raw_target: str) -> str | None:
+    """Classify a source target (basename/path level, case-insensitive).
+
+    ``"env"`` — known env/credentials basename (``.env*`` prefix/suffix,
+    ``credential*``, ``auth.json``; covers the ``${HERMES_HOME:-~/.hermes}/.env``
+    idiom). ``"env-var"`` — variable-bearing target with no resolvable env
+    basename whose stripped variable name still claims env/credential/auth
+    semantics (``$ENV_FILE``) → reduced confidence 0.70. ``None`` — not an
+    env/credentials target (plain ``$CONFIG`` sources never fire).
+    """
+    token = _clean_token(raw_target)
+    lowered = token.casefold()
+    if not lowered:
+        return None
+    segment = re.split(r"[\\/]", lowered)[-1]
+    if (
+        segment.startswith(".env")
+        or segment.endswith(".env")
+        or "credential" in segment
+        or segment == "auth.json"
+    ):
+        return "env"
+    if "$" in token:
+        stripped = lowered.replace("$", "").replace("{", "").replace("}", "")
+        bare = re.split(r"[\\/]", stripped)[-1]
+        if (
+            bare.startswith("env")
+            or ".env" in stripped
+            or "credential" in stripped
+            or "auth" in stripped
+        ):
+            return "env-var"
+    return None
+
+
+def _env_source_findings(
+    rules: dict[str, Rule], rel_path: str, lines: list[str], claimed: list[str]
+) -> list[Finding]:
+    rule = _rule_of(rules, "LNS-SHL-007")
+    if rule is None:
+        return []
+    # Necessary-condition gates (PERF, D-061 style): every send regex needs
+    # curl/wget; every source regex needs source/. /cat vocabulary.
+    if not any("curl" in line or "wget" in line for line in lines):
+        return []
+    if not any("source" in line or ". " in line or "cat" in line for line in lines):
+        return []
+    declared, extra_tags = _declared_flag(rule, claimed)
+    shell_file = rel_path.endswith(".sh")
+    region: frozenset[int] | None = None if shell_file else _shell_regions(lines)
+
+    def _in_region(lineno: int) -> bool:
+        return region is None or lineno in region
+
+    # Pass 1: source events (line-ordered). Redirect reads (``base64 < file``)
+    # and @file attaches never land here — that pairing is NET-011's turf, and
+    # the exclusion is load-bearing for vector byte-exactness (C/C′ shapes).
+    sources: list[tuple[int, str, str]] = []
+    for lineno, line in enumerate(lines, start=1):
+        if "source" not in line and ". " not in line and "cat" not in line:
+            continue
+        if not _in_region(lineno):
+            continue
+        kind, target = _env_source_kind(line)
+        if kind is not None and _envfile_target_class(target) is not None:
+            sources.append((lineno, kind, target))
+    if not sources:
+        return []
+
+    # Pass 2: one finding per qualifying send line, paired with the NEAREST
+    # strictly-earlier source event (no window cap — ordered same-file bar,
+    # matching E6's same-file correlation semantics).
+    out: list[Finding] = []
+    for lineno, line in enumerate(lines, start=1):
+        if "curl" not in line and "wget" not in line:
+            continue
+        if not _in_region(lineno):
+            continue
+        if _CURL_SEND_RE.search(line):
+            send_short = "curl-data"
+        elif _WGET_SEND_RE.search(line):
+            send_short = "wget-data"
+        else:
+            continue
+        if _VAR_INTERP_RE.search(line) is None:
+            continue  # static-payload sends never fire; @file attaches are NET-011's
+        prior = [source for source in sources if source[0] < lineno]
+        if not prior:
+            continue
+        _src_lineno, kind, target = prior[-1]
+        target_class = _envfile_target_class(target)
+        if target_class is None:
+            continue
+        unknown_var = target_class == "env-var"
+        out.append(
+            _build(
+                rule,
+                rel_path,
+                lineno,
+                line.strip(),
+                f"env-source-flow:{kind}:{send_short}",
+                "Script sources an env/credentials file and later sends "
+                "variable-bearing data out — after sourcing, every $VAR "
+                "expansion is potentially credential-bearing.",
+                declared=declared,
+                extra_tags=extra_tags,
+                confidence=(REDUCED_CONFIDENCE_ENV_SOURCE if unknown_var else None),
+                effective_severity=None,
             )
         )
     return out

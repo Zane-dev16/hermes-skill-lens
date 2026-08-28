@@ -1,0 +1,50 @@
+# E1 — H4 fallback grooming (D-014 shipped; D-024 pairing IS the FP filter).
+# Fires per fallback entry lacking a requires counterpart IN THE SAME LIST;
+# when no requires_* key is declared at all, every fallback entry fires.
+id: LNS-MAN-008
+title: "Fallback declaration without a requires counterpart"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override
+severity: MEDIUM
+weight: 7
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: false
+tags:
+  - fallback-grooming
+  - hidden-invocation
+  - hermes-dialect
+remediation: >-
+  Pair every fallback_for_toolsets/fallback_for_tools entry with a
+  requires_toolsets/requires_tools counterpart in the same list, or drop the
+  fallback claim; if the broad fallback is the skill's documented purpose,
+  baseline it via a severity_override policy row instead.
+rationale: >-
+  "I am your fallback for X" must pair with "and I require X-or-equivalent
+  to function" (D-024 pairing law, SEC-001 precedent): fallback without a
+  requires counterpart is the persistence-by-fallback shape from §17 H4/T-H4
+  — the host routes work to the skill whenever a preferred tool is missing.
+  MEDIUM/static_only false like MAN-001's user-invocable:false: the
+  declaration IS the activation condition; the host route is the consumption
+  path, no further code needed, so the undeclared integrity.override
+  deliberately arms the §8.2 ceiling and severity_override is the honest
+  author's remedy. Residual accepted: a skill legitimately falling back for
+  a toolset it does not itself require fires (cross-list usage) — narrow,
+  documented, policy-resolvable. The heritage variant naming allowed-tools
+  is deliberately not shipped (host-routing vs model-invocation vocabulary
+  mismatch).
+detection: >-
+  Fire once per entry of fallback_for_toolsets absent from requires_toolsets
+  and once per entry of fallback_for_tools absent from requires_tools
+  (same-list pairing; entries compared case-insensitively). When no
+  requires_* key is declared, every fallback entry fires. One finding per
+  offending entry; location = the entry's list line; fingerprint binds the
+  normalized entry name plus list kind (toolset/tool), MAN-005 style, so
+  fixing one entry clears one finding without shifting others.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/fallback-groomer
+  negative:
+    - corpus/fixtures/benign/honest-fallback

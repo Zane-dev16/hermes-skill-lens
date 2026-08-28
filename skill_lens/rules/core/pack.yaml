@@ -4,19 +4,11 @@
 # (D-RULEOWN). Loads offline from package data; zero network. Semver is
 # YYYY.MM.N: new rule = patch bump, weight/severity change = minor bump +
 # changelog rationale, IR/schema break = major bump.
-#
-# RESERVED IDS (not yet shipped — see DECISIONS D-014):
-#   LNS-MAN-006 tag-spoof heuristic — deferred (highest-FP-risk E1 heuristic;
-#               needs corpus breadth before shipping).
-#   LNS-MAN-008 fallback-grooming heuristic — deferred with MAN-006.
-#   LNS-SHL-007 env-file read family (${HERMES_HOME:-~/.hermes}/.env idiom) —
-#               deferred to the source→sink taint phase so credentials.read
-#               evidence can be correlated, not merely present.
 name: core
-version: "2026.08.6"
+version: "2026.08.7"
 spec_version: rule-pack/1
 description: >-
-  Core detection pack v0.1 for Hermes Skill Lens: forty rules across the
+  Core detection pack v0.1 for Hermes Skill Lens: forty-four rules across the
   eight Phase-1/1.5 engines (E1 manifest, E2 textinject, E3 shellscan, E4
   pyscan, E5 jsscan, E6 netgraph, E7 secretscan, E8 depintel) plus the
   claims-stage vague-description rule, selected from the SPEC §17
@@ -25,6 +17,24 @@ description: >-
   corpus/fixtures/.
 rules_dir: rules
 changelog:
+  - version: "2026.08.7"
+    date: "2026-08-28"
+    rationale: >-
+      Ship the three D-014-deferred deterministic rules (LNS-MAN-006,
+      LNS-MAN-008, LNS-SHL-007) per the D-060 owner ruling.
+    notes:
+      - "Ship the three D-014-deferred rules (corpus breadth precondition met;"
+      - "D-060): LNS-MAN-006 tag-spoof LOW static 0.90 (clause A reserved"
+      - "impersonation tokens + clause B all-tags-divergent n>=3 padding;"
+      - "category-name and bare-hermes tags are carve-outs), LNS-MAN-008"
+      - "fallback-grooming MED dynamic 0.90 (fallback entry without a same-list"
+      - "requires counterpart), LNS-SHL-007 env-source-to-send flow HIGH regex"
+      - "0.85 (E3-internal same-file source→sink pairing: dot-source/set -a/"
+      - "export $(cat ...) of .env*/credential*/auth.json basenames, then a"
+      - "variable-interpolating curl/wget send in the same shell region;"
+      - "0.70 unknown-var band; redirect reads/@file attaches stay NET-011's)."
+      - "Fixtures: malicious tag-spoof-padder/fallback-groomer/env-source-exfil"
+      - "+ benign honest-multi-tag/honest-fallback/env-config-loader twins."
   - version: "2026.08.6"
     date: "2026-08-25"
     notes:

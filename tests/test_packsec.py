@@ -59,7 +59,7 @@ def test_canonical_inputs_sorted_and_complete() -> None:
     names = [name for name, _ in inputs]
     assert names == sorted(names)
     assert names[0] == "pack.yaml"
-    # 41 rule files + manifest at the time of writing; the invariant that
+    # 44 rule files + manifest at the time of writing; the invariant that
     # matters: every rules/*.yaml on disk is present exactly once.
     on_disk = sorted(p.name for p in (core_pack_path() / "rules").glob("*.yaml"))
     assert [n[len("rules/") :] for n in names[1:]] == on_disk
@@ -157,7 +157,7 @@ def test_core_signature_passes_on_committed_tree() -> None:
 
 def test_tampered_rule_file_is_rejected_loudly(tmp_path: Path) -> None:
     """THE Phase-5 tamper law: flipping a byte in ANY pack file ⇒ FAIL."""
-    if not (REPO_ROOT / "keys" / "core-pack-2026.08.6.sig").is_file():
+    if not (REPO_ROOT / "keys" / "core-pack-2026.08.7.sig").is_file():
         pytest.skip("committed signature not present in this tree")
     dst = _mirror_tree(tmp_path)
     target = dst / "rules" / "LNS-NET-011.yaml"

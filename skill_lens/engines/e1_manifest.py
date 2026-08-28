@@ -54,7 +54,9 @@ RULE_IDS: tuple[str, ...] = (
     "LNS-MAN-003",
     "LNS-MAN-004",
     "LNS-MAN-005",
+    "LNS-MAN-006",
     "LNS-MAN-007",
+    "LNS-MAN-008",
 )
 
 # -- detection vocabulary -----------------------------------------------------
@@ -80,6 +82,37 @@ _SENSITIVE_SEGMENT_RE = re.compile(
 )
 _RESERVED_CONFIG_PREFIXES: tuple[str, ...] = ("plugins.entries.", "security.", "hooks.")
 _RESERVED_CONFIG_EXACT = frozenset({"plugins.entries", "security", "hooks"})
+
+#: MAN-006 reserved impersonation tokens (rule detection verbatim). Bare
+#: "hermes" is deliberately excluded — for a Hermes-ecosystem skill,
+#: self-tagging the ecosystem name is a plausible benign story, while
+#: platform-authority composites stay reserved. Closed vocabulary: new brand
+#: impersonations are pack-update material (DEP-002 maintenance model).
+_MAN006_RESERVED_TAGS = frozenset(
+    {
+        "official",
+        "core",
+        "builtin",
+        "built-in",
+        "verified",
+        "certified",
+        "trusted",
+        "recommended",
+        "first-party",
+        "system",
+        "anthropic",
+        "nous",
+        "hermes-core",
+        "hermes-official",
+        "hermes-team",
+    }
+)
+_MAN006_TAG_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+#: MAN-006 clause-B gate: shorter divergent lists stay silent (the corpus's
+#: kubernetes/devtools and python/formatting twins — the loud evidence a
+#: threshold < 3 would be dishonest).
+_MAN006_MIN_DIVERGENT_TAGS = 3
 
 _SNIPPET_MAX = 160
 
@@ -164,6 +197,12 @@ class ManifestEngine:
         rule = self._rules.get("LNS-MAN-007")
         if rule is not None and frontmatter.hermes is not None:
             findings.extend(self._man007(frontmatter.hermes.config, rule, locator, manifest_path))
+        rule = self._rules.get("LNS-MAN-006")
+        if rule is not None and frontmatter.hermes is not None:
+            findings.extend(self._man006(frontmatter, rule, locator, manifest_path))
+        rule = self._rules.get("LNS-MAN-008")
+        if rule is not None and frontmatter.hermes is not None:
+            findings.extend(self._man008(frontmatter.hermes, rule, locator, manifest_path))
 
         findings.sort(key=finding_sort_key)
         return findings
@@ -435,10 +474,207 @@ class ManifestEngine:
             )
         return findings
 
+    # -- LNS-MAN-006 ----------------------------------------------------------
+
+    def _man006(
+        self,
+        frontmatter: Any,
+        rule: Rule,
+        locator: _FrontmatterLocator,
+        manifest_path: str,
+    ) -> list[Finding]:
+        hermes = frontmatter.hermes
+        assert hermes is not None  # caller gates on hermes presence
+        tags = hermes.tags
+        if not tags:
+            return []
+        findings: list[Finding] = []
+        # Clause A — one finding per reserved impersonation tag.
+        reserved = _man006_reserved_tags(tags)
+        for normalized in reserved:
+            raw = next(tag for tag in tags if _man006_normalize_tag(tag) == normalized)
+            line = locator.find_list_item_line("tags", raw)
+            findings.append(
+                Finding(
+                    # Fingerprint binds the normalized tag (A) so removing
+                    # one offending tag clears exactly one finding.
+                    fingerprint=_fp(rule, normalized),
+                    rule_id=rule.id,
+                    rule_version=rule.rule_version,
+                    engine=rule.engine,
+                    title=rule.title,
+                    capability=rule.capability,
+                    severity=rule.severity,
+                    effective_severity=rule.severity,
+                    confidence=rule.confidence_default,
+                    evidence_kind=rule.evidence_kind,
+                    static_only=rule.static_only,
+                    location=Location(
+                        path=manifest_path,
+                        start_line=line,
+                        end_line=line,
+                        snippet=(f"- {raw}")[:_SNIPPET_MAX],
+                        redacted=False,
+                    ),
+                    message=(
+                        f"tag '{raw}' claims reserved platform authority — "
+                        "metadata.hermes.tags is selection/retrieval input"
+                    ),
+                    remediation=rule.remediation,
+                    tags=tuple(rule.tags),
+                )
+            )
+        # Clause B — one finding when the whole tag set diverges (n >= 3).
+        if _man006_divergent_padding(tags, frontmatter):
+            multiset = ",".join(sorted(_man006_normalize_tag(tag) for tag in tags))
+            first = tags[0]
+            line = locator.find_list_item_line("tags", first)
+            findings.append(
+                Finding(
+                    # Fingerprint binds the normalized tag multiset (B).
+                    fingerprint=_fp(rule, f"divergent:{multiset}"),
+                    rule_id=rule.id,
+                    rule_version=rule.rule_version,
+                    engine=rule.engine,
+                    title=rule.title,
+                    capability=rule.capability,
+                    severity=rule.severity,
+                    effective_severity=rule.severity,
+                    confidence=rule.confidence_default,
+                    evidence_kind=rule.evidence_kind,
+                    static_only=rule.static_only,
+                    location=Location(
+                        path=manifest_path,
+                        start_line=line,
+                        end_line=line,
+                        snippet=(f"- {first}")[:_SNIPPET_MAX],
+                        redacted=False,
+                    ),
+                    message=(
+                        f"all {len(tags)} tags diverge from the skill's "
+                        "name/description vocabulary (padding shape)"
+                    ),
+                    remediation=rule.remediation,
+                    tags=tuple(rule.tags),
+                )
+            )
+        return findings
+
+    # -- LNS-MAN-008 ----------------------------------------------------------
+
+    def _man008(
+        self,
+        hermes: Any,
+        rule: Rule,
+        locator: _FrontmatterLocator,
+        manifest_path: str,
+    ) -> list[Finding]:
+        findings: list[Finding] = []
+        for kind, entry in _man008_unpaired(hermes):
+            anchor = "fallback_for_toolsets" if kind == "toolset" else "fallback_for_tools"
+            counterpart = "requires_toolsets" if kind == "toolset" else "requires_tools"
+            line = locator.find_list_item_line(anchor, entry)
+            findings.append(
+                Finding(
+                    # Fingerprint binds the normalized entry name + list kind
+                    # (MAN-005 style): fixing one entry clears one finding.
+                    fingerprint=_fp(rule, f"{kind}:{entry}"),
+                    rule_id=rule.id,
+                    rule_version=rule.rule_version,
+                    engine=rule.engine,
+                    title=rule.title,
+                    capability=rule.capability,
+                    severity=rule.severity,
+                    effective_severity=rule.severity,
+                    confidence=rule.confidence_default,
+                    evidence_kind=rule.evidence_kind,
+                    static_only=rule.static_only,
+                    location=Location(
+                        path=manifest_path,
+                        start_line=line,
+                        end_line=line,
+                        snippet=(f"- {entry}")[:_SNIPPET_MAX],
+                        redacted=False,
+                    ),
+                    message=(
+                        f"'{entry}' declared under {anchor} with no "
+                        f"{counterpart} counterpart in the same list"
+                    ),
+                    remediation=rule.remediation,
+                    tags=tuple(rule.tags),
+                )
+            )
+        return findings
+
 
 # ---------------------------------------------------------------------------
 # Detection predicates + shared helpers (module-level = unit-testable)
 # ---------------------------------------------------------------------------
+
+
+def _man006_normalize_tag(tag: str) -> str:
+    """MAN-006 tag normalization: casefold, ``_`` to ``-`` (detection verbatim)."""
+    return tag.strip().casefold().replace("_", "-")
+
+
+def _man006_reserved_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    """MAN-006 clause A: normalized reserved tags, appearance order, deduped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        normalized = _man006_normalize_tag(tag)
+        if normalized in _MAN006_RESERVED_TAGS and normalized not in seen:
+            seen.add(normalized)
+            out.append(normalized)
+    return tuple(out)
+
+
+def _man006_context_tokens(frontmatter: Any) -> frozenset[str]:
+    """MAN-006 context vocabulary: tokens of ``name`` + ``description_raw``."""
+    name = getattr(frontmatter, "name", "") or ""
+    description = getattr(frontmatter, "description_raw", "") or ""
+    text = f"{name} {description}".casefold().replace("_", "-")
+    return frozenset(_MAN006_TAG_TOKEN_RE.findall(text))
+
+
+def _man006_divergent_padding(tags: tuple[str, ...], frontmatter: Any) -> bool:
+    """MAN-006 clause B: every tag's token set disjoint from context AND n >= 3.
+
+    Deliberately NOT a heritage-style overlap threshold — the corpus's n=2
+    all-divergent benign twins (kubernetes/devtools, python/formatting) are
+    the loud evidence a lower bar would be dishonest (D-024: the pairing
+    B1+small-n carve-out IS the FP filter).
+    """
+    if len(tags) < _MAN006_MIN_DIVERGENT_TAGS:
+        return False
+    context_tokens = _man006_context_tokens(frontmatter)
+    for tag in tags:
+        tag_tokens = set(_MAN006_TAG_TOKEN_RE.findall(_man006_normalize_tag(tag)))
+        if tag_tokens & context_tokens:
+            return False
+    return True
+
+
+def _man008_unpaired(hermes: Any) -> tuple[tuple[str, str], ...]:
+    """MAN-008: ``(list_kind, raw_entry)`` for fallback entries lacking a
+    same-list requires counterpart, in (toolsets, tools) order, entries in
+    IR order, deduped. Raw entries ride along so locators/snippets surface
+    the frontmatter text verbatim; the pairing compares case-insensitively.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for kind, fallbacks, requires in (
+        ("toolset", hermes.fallback_for_toolsets, hermes.requires_toolsets),
+        ("tool", hermes.fallback_for_tools, hermes.requires_tools),
+    ):
+        required = {name.strip().casefold() for name in requires}
+        for entry in fallbacks:
+            name = entry.strip()
+            key = (kind, name.casefold())
+            if name and key not in seen and key[1] not in required:
+                seen.add(key)
+                pairs.append((kind, name))
+    return tuple(pairs)
 
 
 def _man001_matches(normalized_key: str, value: Any) -> bool:
@@ -470,7 +706,7 @@ def _truthy(value: Any) -> bool:
 def _explicit_false(value: Any) -> bool:
     """MAN-001's ``user-invocable: false`` fires on an explicit FALSE."""
     if isinstance(value, bool):
-        return value is False
+        return not value  # bool: explicit-false means exactly False
     if isinstance(value, str):
         return value.strip().lower() in {"false", "no", "off"}
     return False

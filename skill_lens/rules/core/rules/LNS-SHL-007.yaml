@@ -1,0 +1,56 @@
+# E3 — R3/H8/H9: shell-level env-file sourcing correlated with a
+# data-carrying send (source→sink taint at shell fidelity). D-014 unblocked:
+# this is the credentials.read-correlated upgrade over bare-presence pairing.
+id: LNS-SHL-007
+title: "Sources an env/credentials file and sends variable-bearing data out"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: credentials.read
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.85
+static_only: false
+tags:
+  - credential-harvest
+  - env-file-source
+  - exfil-flow
+remediation: >-
+  Never source live credential stores from skill scripts; read only the
+  specific variables needed via the host tool config, and never combine
+  sourcing with outbound sends. Declare network.send + credentials.read via
+  allowed-tools/compatibility if the flow is the skill's documented purpose.
+rationale: >-
+  Sourcing $HERMES_HOME/.env executes live provider tokens into the shell
+  environment (§17 H9: ".env holds live provider tokens"); a subsequent
+  data-carrying send that interpolates shell variables gives those tokens an
+  outbound path — the harvest-then-exfil flow of §17 R3 at shell fidelity
+  (E3-internal same-file pairing mirrors the D-035/D-036 E4/E5 source→sink
+  lanes; no bash-AST lane needed for a two-token predicate, D-034 escape
+  hatch documented for v1.0). Paired-action correlation replaces the
+  bare-presence pairing D-014 rejected. HIGH/18 sits on the SHL
+  executable-evidence band — the matched sites ARE executable, same
+  reasoning D-014 recorded for SHL-002's dynamic HIGH; it is the E3 sibling
+  of PYS-004/JSS-004 at regex confidence 0.85 (no parse tree). NET-011 keeps
+  secrets.exfil/CRITICAL for endpoint-classed exfil; the two are different
+  evidence classes and legitimately co-fire on gross exfil bundles.
+detection: >-
+  Fire per data-carrying send line of the shell send vocabulary (curl and
+  wget with -d/--data/-F/--upload/-T/-X POST|PUT flags) whose arguments
+  interpolate a shell variable or command substitution, when an earlier
+  line in the same shell region sources an env/credentials file (source/.
+  file, set -a + source, export $(cat file); basenames
+  .env*/credential*/auth.json; ${HERMES_HOME:-~/.hermes}/.env idiom).
+  Unknown-variable source targets adjacent to env basenames fire at
+  reduced confidence 0.70. Redirect reads (base64 < file), @file attaches,
+  and static-payload sends never fire (NET-011 owns those pairings); bare
+  eval $(cat ...) stays with SHL-002. For markdown/non-shell text both
+  sides must sit inside fenced bash/sh blocks; scripts/*.sh scan
+  whole-file. Evidence token env-source-flow:<source-kind>:<send-short> —
+  no paths, no variable content (privacy law).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/env-source-exfil
+  negative:
+    - corpus/fixtures/benign/env-config-loader

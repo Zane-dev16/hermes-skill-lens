@@ -75,8 +75,8 @@ def write_pack(tmp_path: Path, *rule_texts: str, pack_yaml: str | None = None) -
 def test_core_pack_loads_offline_with_expected_shape() -> None:
     pack = load_core_pack()
     assert pack.name == "core"
-    assert pack.version == "2026.08.6"  # YYYY.MM.N semver (SPEC §15); patch bump = new rule
-    assert len(pack.rules) >= 40  # 17 Phase-1 + 8 E4 + 8 E5 + 5 E2 + 3 E8 rules (D-045)
+    assert pack.version == "2026.08.7"  # YYYY.MM.N semver (SPEC §15); patch bump = new rule
+    assert len(pack.rules) >= 40  # 44 at 2026.08.7 (D-060: deterministic rules scale on merit)
     ids = [rule.id for rule in pack.rules]
     assert ids == sorted(ids), "rules must be id-sorted"
     assert len(set(ids)) == len(ids), "duplicate ids in shipped pack"
@@ -105,9 +105,13 @@ def test_core_pack_reservations_hold() -> None:
     assert man004.severity == "LOW"
     assert man004.weight == 2
     assert man004.fixtures_positive and man004.fixtures_negative
-    # Still-reserved deferred ids must not appear under other meanings.
-    assert pack.rule_by_id("LNS-MAN-006") is None
-    assert pack.rule_by_id("LNS-MAN-008") is None
+    # The D-014-deferred ids shipped at 2026.08.7 (D-060 unblock).
+    man006 = pack.rule_by_id("LNS-MAN-006")
+    assert man006 is not None and man006.engine == "manifest"
+    man008 = pack.rule_by_id("LNS-MAN-008")
+    assert man008 is not None and man008.engine == "manifest"
+    shl007 = pack.rule_by_id("LNS-SHL-007")
+    assert shl007 is not None and shl007.engine == "shellscan"
     # §7 anchor: NET-011 title/capability conform to the worked finding.
     net011 = pack.rule_by_id("LNS-NET-011")
     assert net011 is not None

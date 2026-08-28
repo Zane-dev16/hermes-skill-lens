@@ -70,7 +70,7 @@ def test_slash_rules_external_pack_structural_check(
     out = dispatch_verb(
         f"rules verify {target}", view=_view(tmp_path), cache=cache
     )
-    assert "2026.08.6" in out
+    assert "2026.08.7" in out
     assert "sha256:" in out
     assert "structural load only" in out
 

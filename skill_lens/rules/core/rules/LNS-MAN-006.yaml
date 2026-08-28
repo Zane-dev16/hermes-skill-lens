@@ -1,0 +1,52 @@
+# E1 — H4 tag spoofing (D-014 shipped; D-024 pairing IS the FP filter).
+# Clause A fires per reserved impersonation tag; clause B fires once when
+# every tag diverges from name+description AND the list has >= 3 entries.
+# Category-name tags and bare "hermes" are deliberate carve-outs.
+id: LNS-MAN-006
+title: "Reserved or fully divergent skill tags"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override:deceptive_metadata
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: true
+tags:
+  - deceptive-metadata
+  - tag-spoof
+  - hermes-dialect
+remediation: >-
+  Tag only what the skill factually is: drop reserved platform/brand tokens
+  and self-describing padding; every tag should overlap the skill's own name
+  or description vocabulary.
+rationale: >-
+  metadata.hermes.tags is host-consumed selection/retrieval input (SPEC §17
+  H4); padding it with high-demand reserved terms (official, verified,
+  first-party) is impersonation, and a fully divergent tag set is grooming
+  for selection ranking (D-014 corpus-breadth precondition met per D-060).
+  LOW/static_only per the D-027 law: a dangling metadata claim never arms
+  the integrity ceiling by itself; severity prices the interpretive
+  uncertainty the §7 manifest band does not (D-024-style calibration note).
+  Residuals accepted: <=2-tag or partly-overlapping padding can miss;
+  cross-list fallback shapes belong to LNS-MAN-008; the reserved-token
+  vocabulary is closed and grows by pack update (DEP-002 maintenance model).
+detection: >-
+  Fire once per tags entry whose normalized form (casefold, underscore to
+  dash) is in the reserved set {official, core, builtin, built-in, verified,
+  certified, trusted, recommended, first-party, system, anthropic, nous,
+  hermes-core, hermes-official, hermes-team}, AND once per SKILL.md when
+  every tag's token set is disjoint from the tokens of name+description and
+  the tag list has >= 3 entries. Category-name tags and bare "hermes" never
+  fire; per-tag divergence alone (short honest lists) never fires. Location
+  = the offending tag's list line (first tag line for the divergent case);
+  fingerprints bind the normalized tag (A) or the normalized tag multiset
+  (B) — never line numbers.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/tag-spoof-padder
+  negative:
+    - corpus/fixtures/benign/honest-multi-tag
+    - corpus/fixtures/benign/k8s-manifest-linter
+    - corpus/fixtures/benign/pinned-pyproject-tool

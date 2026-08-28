@@ -196,13 +196,17 @@ def _index_rows(pack: RulePack, policy: Any) -> list[str]:
 
 def _index_rows_compact(pack: RulePack, policy: Any) -> list[str]:
     rows: list[str] = []
+    # Ids are fixed-width by grammar (LNS-XXX-NNN = 12 chars), so the compact
+    # render skips the alignment pad — at 44 rules the collapsed ladder rung
+    # must still fit the HARD chat budget (§11.3: collapsed render keeps the
+    # full effective set).
     for rule in sorted(pack.rules, key=lambda r: r.id):
         suffix = ""
         if policy.is_disabled(rule.id):
             suffix = " DISABLED"
         elif policy.severity_override_for(rule.id) is not None:
             suffix = " overridden"
-        rows.append(f"{rule.id:<13} {rule.capability}{suffix}")
+        rows.append(f"{rule.id} {rule.capability}{suffix}")
     return rows
 
 
