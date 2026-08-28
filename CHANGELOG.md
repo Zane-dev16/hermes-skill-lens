@@ -6,6 +6,21 @@ pack pin together, D-RULEOWN); the rule pack versions independently as
 change = minor + rationale · deprecation ships ≥2 minors before removal).
 Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
 
+## [0.9.1] — post-tag hardening (2026-08-28)
+
+- Perf headroom repair: necessary-condition prefilter gates in E2/E3/E6/E7 —
+  cold p95 352 → 156 ms idle, 279 ms under extreme load (budget 400 ms),
+  output-identical (D-061).
+- Three deferred rules shipped: LNS-MAN-006 tag-spoof (LOW), LNS-MAN-008
+  fallback-grooming (MED), LNS-SHL-007 env-source-to-send (HIGH) — pack
+  2026.08.7 (D-062).
+- D-046 gap closure: E6 bounded multi-line send-sink pairing for NET-011;
+  E5 bare-call `Function(src)()` fires in both lanes — pack 2026.08.8
+  (D-063).
+- Release tooling: `check-signature-fresh` accepts `--strict` for CI
+  parity (rule-pack.yml).
+- Core pack pin travels with v0.9.1 at 2026.08.8 (D-RULEOWN).
+
 ## [0.9.0a0] — Phase 5 — governance + release engineering (2026-08-26)
 
 - Rule-pack signing: ed25519 key ceremony (`scripts/sign_core_pack.py`),
