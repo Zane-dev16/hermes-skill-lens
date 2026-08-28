@@ -219,6 +219,10 @@ def extract_heredoc_blocks(lines: list[str]) -> list[tuple[int, HeredocBlock]]:
     blocks: list[tuple[int, HeredocBlock]] = []
     index = 0
     while index < len(lines):
+        if "<<" not in lines[index]:
+            # Necessary-condition gate: _HEREDOC_START_RE requires "<<".
+            index += 1
+            continue
         match = _HEREDOC_START_RE.search(lines[index])
         if match is None:
             index += 1
@@ -241,6 +245,8 @@ def extract_sink_sites(lines: list[str]) -> list[SinkSite]:
     sites: list[SinkSite] = []
     seen: set[tuple[int, str]] = set()
     for lineno, line in enumerate(lines, start=1):
+        if not (">" in line or "tee" in line or "sed" in line or "cp" in line or "mv" in line):
+            continue  # necessary-condition gate: no sink regex can match (PERF)
         candidates: list[str] = []
         for match in _REDIRECT_TARGET_RE.finditer(line):
             candidates.append(match.group(1))
@@ -301,6 +307,8 @@ def rm_outside_labels(line: str) -> list[PathLabel]:
     caller applies reduced confidence instead of silence.
     """
     labels: list[PathLabel] = []
+    if "rm" not in line:
+        return labels  # necessary-condition gate: _RM_COMMAND_RE requires "rm"
     for match in _RM_COMMAND_RE.finditer(line):
         args = match.group(1)
         flag_chunks = re.findall(r"(?:^|\s)-{1,2}([\w-]+)", args)
@@ -418,6 +426,8 @@ def _pipe_fetch_findings(
     declared, extra_tags = _declared_flag(rule, claimed)
     out: list[Finding] = []
     for lineno, line in enumerate(lines, start=1):
+        if "curl" not in line and "wget" not in line:
+            continue  # necessary-condition gate: _FETCH_PIPE_SHELL_RE requires curl|wget
         match = _FETCH_PIPE_SHELL_RE.search(line)
         if match is None:
             continue
@@ -461,6 +471,14 @@ def _obfuscated_exec_findings(
     )
     out: list[Finding] = []
     for lineno, line in enumerate(lines, start=1):
+        if not (
+            "base64" in line
+            or "eval" in line
+            or "printf" in line
+            or "python" in line
+            or "perl" in line
+        ):
+            continue  # necessary-condition gate: every check regex requires one of these
         kind = next((name for regex, name in checks if regex.search(line)), None)
         if kind is None:
             continue
@@ -597,6 +615,8 @@ def _cron_persistence_findings(
     )
     reported: set[tuple[str, int]] = set()
     for lineno, line in enumerate(lines, start=1):
+        if not ("crontab" in line or "systemctl" in line or "hermes" in line or ">" in line):
+            continue  # necessary-condition gate: every scheduler regex requires one of these
         for trigger, regex in scheduler_lines:
             if trigger in ("os-user-timer", "hermes-cron-add") and any(
                 key[0] == trigger for key in reported

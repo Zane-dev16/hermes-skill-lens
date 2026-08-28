@@ -43,6 +43,7 @@ from .base import (
     Location,
     ScanContext,
     finding_sort_key,
+    gate_hit,
     iter_text_files,
 )
 
@@ -76,6 +77,12 @@ _TOKEN_CANDIDATE_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9+/=_\-]{{{_MIN_TOKEN_CH
 #: Rule-spec marker skip: obvious test/example strings never report (SEC-002).
 _EXAMPLE_MARKER_RE = re.compile(r"(?i)example|placeholder|xxxxxx|x{4,}|not[-_ ]?real|dummy")
 
+#: Necessary-condition prescan for the AWS-secret shape: _AWS_SECRET_RE can
+#: only match where a 40-character [A-Za-z0-9/+=] run exists (its lookarounds
+#: only ever shrink a match), so a line without such a run — and without the
+#: AKIA/ASIA/sk-/xox literals — can match none of the four format regexes.
+_SECRET_RUN_RE = re.compile(r"[A-Za-z0-9/+=]{40}")
+
 #: Assignment/export/config context: `NAME=<tok>`, `"name": "<tok>"`, YAML
 #: `- name: <tok>`. Anchored to the text IMMEDIATELY before the token.
 _ASSIGNMENT_PREFIX_RE = re.compile(
@@ -86,6 +93,24 @@ _ASSIGNMENT_PREFIX_RE = re.compile(
 #: Bearer/pat prefix context (`Authorization: Bearer <tok>` etc.).
 _BEARER_PREFIX_RE = re.compile(
     r"""(?i)\b(bearer|token|pat|authorization|api[_-]?key)\b[^A-Za-z0-9]*$"""
+)
+
+#: PERF (D-049/D-056 gate family): necessary-condition literals for the
+#: entropy path. A candidate token can only ever REPORT when the text before
+#: it ends in an assignment shape (requires ``:`` or ``=``) or a bearer word
+#: (checked re-IGNORECASE-exact via :func:`gate_hit`; a casefold()-based
+#: check would NOT be safe — U+0130 folds to "i" + a combining dot). Lines
+#: matching none produce no findings, so the token scan may be skipped.
+_ENTROPY_CONTEXT_LITERALS: tuple[str, ...] = (
+    ":",
+    "=",
+    "bearer",
+    "token",
+    "pat",
+    "authorization",
+    "api_key",
+    "apikey",
+    "api-key",
 )
 
 
@@ -149,6 +174,25 @@ class SecretScanEngine:
         pem_blocks: list[tuple[int, int, str]] = []  # (begin_line, end_line, algo)
 
         for lineno, line in enumerate(lines, start=1):
+            if len(line) < 40 and not (
+                "AKIA" in line or "ASIA" in line or "sk-" in line or "xox" in line
+            ):
+                # Necessary-condition gate (PERF): _AWS_SECRET_RE needs 40
+                # class chars, and the id/openai/slack regexes need their
+                # literals — a line with neither length nor literals can
+                # match none of the four.
+                continue
+            if not (
+                "AKIA" in line
+                or "ASIA" in line
+                or "sk-" in line
+                or "xox" in line
+                or _SECRET_RUN_RE.search(line)
+            ):
+                # Second-stage necessary-condition gate (PERF): without the
+                # literals, only _AWS_SECRET_RE could match, and that needs
+                # the 40-char run.
+                continue
             for match in _AWS_ID_RE.finditer(line):
                 aws_ids.append((lineno, match.group(1)))
             for match in _AWS_SECRET_RE.finditer(line):
@@ -157,7 +201,9 @@ class SecretScanEngine:
                 openai_hits.append((lineno, match.group(1)))
             for match in _SLACK_TOKEN_RE.finditer(line):
                 slack_hits.append((lineno, match.group(1)))
-        pem_blocks = _match_pem_blocks(lines)
+        # Necessary-condition gate: a PEM block requires a BEGIN marker, so a
+        # text without one yields no blocks (and gcp_mode stays False).
+        pem_blocks = _match_pem_blocks(lines) if "-----BEGIN" in full_text else []
 
         findings: list[Finding] = []
 
@@ -276,6 +322,10 @@ class SecretScanEngine:
         findings: list[Finding] = []
         reported: set[str] = set()
         for lineno, line in enumerate(lines, start=1):
+            if len(line) < _MIN_TOKEN_CHARS:
+                continue  # necessary-condition gate: candidates need 24 class chars
+            if not gate_hit(line, _ENTROPY_CONTEXT_LITERALS):
+                continue  # necessary-condition gate: no reporting context possible (PERF)
             if _EXAMPLE_MARKER_RE.search(line):
                 continue  # rule-spec skip: test/example markers never report
             for match in _TOKEN_CANDIDATE_RE.finditer(line):

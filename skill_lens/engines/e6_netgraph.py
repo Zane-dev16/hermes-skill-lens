@@ -219,6 +219,19 @@ CRED_SOURCE_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("token-variable", _CRED_TOKEN_VAR_RE),
 )
 
+#: PERF (D-049/D-056 gate family): necessary-condition prefilter for the
+#: per-line host extractors. _URL_RE requires ``://``; both IPv4 regexes
+#: require a ``digit.digit`` shape (``\d{1,3}\.\d{1,3}``); _ONION_RE requires
+#: the letters ``onion`` (case-insensitive — folded via gate semantics, not
+#: a casefolded ``in`` check, which could miss ``İ``-folded matches). A line
+#: matching none can yield no host from any extractor.
+_NET_HOST_GATE_RE = re.compile(r"://|\d\.\d|onion", re.IGNORECASE)
+
+#: Necessary-condition prefilter for the send-sink vocabulary: every
+#: SEND_SINK_RES regex is case-SENSITIVE and requires one of these literals,
+#: so a plain substring chain is an exact necessary condition.
+_SEND_SINK_GATE_LITERALS = ("curl", "wget", "requests", "httpx", "fetch")
+
 _SNIPPET_MAX = 160
 
 _RAW_IP_CLASS = "raw-ip"
@@ -239,7 +252,20 @@ def _is_raw_ip(host: str) -> bool:
 
 def _valid_ipv4(literal: str) -> bool:
     parts = literal.split(".")
-    return len(parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in parts)
+    # isascii() before int(): str.isdigit() admits Unicode digit characters
+    # (e.g. "\u00b2") that int() rejects — never raise on invalid input
+    # (advisor-not-gate); ASCII-digit literals classify exactly as before.
+    parts_ok = len(parts) == 4
+    if parts_ok:
+        for part in parts:
+            if not (part.isdigit() and part.isascii()):
+                return False
+            try:
+                if not 0 <= int(part) <= 255:
+                    return False
+            except ValueError:  # pragma: no cover — isdigit()+isascii() precludes it
+                return False
+    return parts_ok
 
 
 def host_suffix_match(host: str, domain: str) -> bool:
@@ -358,6 +384,10 @@ def credential_source_kind(text: str) -> str | None:
 
 
 def line_has_send_sink(line: str) -> bool:
+    if not (
+        "curl" in line or "wget" in line or "requests" in line or "httpx" in line or "fetch" in line
+    ):
+        return False  # necessary-condition gate: no send regex can match (PERF)
     return any(regex.search(line) for regex in SEND_SINK_RES)
 
 
@@ -404,6 +434,8 @@ class NetgraphEngine:
         findings: list[Finding] = []
         for record, text in iter_text_files(bundle_ir, _current_ctx()):
             for lineno, line in enumerate(text.splitlines(), start=1):
+                if _NET_HOST_GATE_RE.search(line) is None:
+                    continue  # necessary-condition gate: no host extractor can match (PERF)
                 hosts: list[str] = [host for _raw, host in extract_url_hosts(line)]
                 hosts.extend(extract_raw_ips(line))
                 hosts.extend(extract_onion_hosts(line))
@@ -454,6 +486,8 @@ class NetgraphEngine:
             lines = text.splitlines()
             file_classes: list[str] = []
             for line in lines:
+                if "://" not in line:
+                    continue  # necessary-condition gate: _URL_RE requires "://"
                 for _raw, host in extract_url_hosts(line):
                     for class_name in classify_host(host):
                         if class_name not in file_classes:

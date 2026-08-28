@@ -84,6 +84,7 @@ from .base import (
     ScanContext,
     claimed_capability_paths,
     current_context,
+    gate_hit,
     iter_text_files,
 )
 
@@ -440,6 +441,13 @@ def skeleton(token: str) -> str:
 def confusable_hits(line: str) -> list[tuple[str, str]]:
     """``(raw_token, vocab_term)`` impersonation pairs on one line (stable)."""
     hits: list[tuple[str, str]] = []
+    if line.isascii():
+        # PERF (D-049 ASCII-gate family): every _CONFUSABLES key is non-ASCII
+        # (skeleton of an ASCII token is its own casefold) and the mixed-script
+        # marker requires Cyrillic/Greek, so a pure-ASCII line can satisfy
+        # neither branch — skip the tokenizer entirely. Output-identical by
+        # construction; vectors and goldens pin empirically.
+        return hits
     for token in _TOKEN_RE.findall(line):
         folded = skeleton(token)
         if folded != token.casefold() and folded in PROTECTED_VOCAB:
@@ -564,6 +572,64 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 _INJECTION_TAG = "prompt-injection"
 
+#: PERF (D-049/D-056 gate family): necessary-condition literals for the
+#: injection grammar. Every pattern in _INJECTION_PATTERNS contains at least
+#: one of these literals as a REQUIRED contiguous substring of any match (the
+#: chat-template sentinels, the role nouns of fake-system, the unbound tails,
+#: the override verbs, the extraction verbs), so a view matching none of them
+#: can match no pattern. Checked via :func:`gate_hit` — re-IGNORECASE-exact
+#: folding with plain substring speed (a casefold()-based check would NOT be
+#: safe: U+0130 folds to "i" + a combining dot, breaking adjacency).
+_INJECTION_GATE_LITERALS: tuple[str, ...] = (
+    "<|",  # roletag (any <|sentinel|>)
+    "inst]",
+    "sys]",  # roletag-inst ([/INST]/[/SYS] tails)
+    "start_of_turn",
+    "end_of_turn",  # roletag-gemma
+    "system",
+    "assistant",
+    "developer",  # fake-system + roletag
+    "jailbroken",
+    "unrestricted",
+    "unfiltered",
+    "uncensored",
+    "liberated",  # you-are-unbound
+    "longer",  # you-are-no-longer
+    "ignore",
+    "disregard",  # override-*
+    "instructions",
+    "update",  # new-instructions
+    "now",  # from-now-on (\s+ separates from/now/on, so "now" is the only
+    # always-contiguous literal; "always"/"you are" tails sit on the far
+    # side of [, ]\s* and after \s+ spans, so they are NOT necessary)
+    "reveal",
+    "print",
+    "repeat",
+    "show",
+    "output",
+    "leak",  # extraction
+)
+
+#: Same shape for _SELF_STATE_PATTERNS: every match must carry a soul-edit
+#: verb or one of the other pattern verbs (``remember``/``cron``/``write``),
+#: or a persona noun (``memor`` covers memory/memories).
+_SELF_STATE_GATE_LITERALS: tuple[str, ...] = (
+    "edit",
+    "update",
+    "modify",
+    "rewrite",
+    "overwrite",
+    "replace",
+    "change",  # soul-edit verbs
+    "remember",  # memory-implant
+    "cron",  # cron-directive
+    "write",  # self-write-directive
+    "soul",
+    "persona",
+    "identity",
+    "memor",  # soul-edit nouns
+)
+
 
 def grammar_hits(text_view: str) -> list[tuple[str, str]]:
     """``(pattern_id, normalized_span)`` pairs over one text view (stable).
@@ -572,6 +638,8 @@ def grammar_hits(text_view: str) -> list[tuple[str, str]]:
     fingerprint vocabulary. Long spans clip to 64 chars (shape, not quote).
     """
     hits: list[tuple[str, str]] = []
+    if not gate_hit(text_view, _INJECTION_GATE_LITERALS):
+        return hits  # necessary-condition gate: no pattern can match (PERF)
     for pattern_id, pattern in _INJECTION_PATTERNS:
         for match in pattern.finditer(text_view):
             span = re.sub(r"\s+", " ", safe_text(match.group(0)).strip().casefold())
@@ -615,6 +683,8 @@ _SELF_STATE_TAG = "self-state-directive"
 def self_state_hits(text_view: str) -> list[tuple[str, str]]:
     """``(pattern_id, normalized_span)`` self-state directive hits (stable)."""
     hits: list[tuple[str, str]] = []
+    if not gate_hit(text_view, _SELF_STATE_GATE_LITERALS):
+        return hits  # necessary-condition gate: no pattern can match (PERF)
     for pattern_id, pattern in _SELF_STATE_PATTERNS:
         for match in pattern.finditer(text_view):
             span = re.sub(r"\s+", " ", safe_text(match.group(0)).strip().casefold())

@@ -106,6 +106,36 @@ def current_context() -> ScanContext:
     return ctx if ctx is not None else ScanContext()
 
 
+#: PERF (D-049/D-056 gate family): case-insensitive gate folding table.
+#: Python ``re`` IGNORECASE matches an ASCII letter against exactly its ASCII
+#: case pair plus four non-ASCII codepoints (verified exhaustively over the
+#: full codepoint space): U+0130/U+0131 -> i, U+212A -> k, U+017F -> s.
+#: Mapping those onto the letters lets per-line "necessary literal" gates
+#: run as plain substring checks over one translated copy — C speed — while
+#: necessity is preserved because every ``(?i)`` match character lands on
+#: the literal letter. (A casefold()-based check would NOT be safe: U+0130
+#: folds to "i" + a combining dot, breaking adjacency.)
+CI_GATE_TRANSLATE = str.maketrans(
+    {chr(cp): chr(cp + 32) for cp in range(ord("A"), ord("Z") + 1)}
+    | {"İ": "i", "ı": "i", "\u212a": "k", "ſ": "s"}
+)
+
+
+def gate_hit(text: str, literals: tuple[str, ...]) -> bool:
+    """Necessary-literal gate: True iff any *literal* may occur in *text*.
+
+    Case-insensitive in the re-IGNORECASE sense (see :data:`CI_GATE_TRANSLATE`).
+    Callers pass only literals whose absence makes every downstream regex
+    match impossible, so a False result may skip the regexes entirely
+    without ever changing output (false positives are harmless by design).
+    """
+    folded = text.translate(CI_GATE_TRANSLATE)
+    for literal in literals:
+        if literal in folded:
+            return True
+    return False
+
+
 def infer_skills_root(path: Path | str) -> Path | None:
     """Nearest enclosing directory literally named ``skills`` (heuristic).
 
@@ -313,6 +343,16 @@ class Finding:
         loc_raw = raw.get("location") or {}
         locations_raw = raw.get("locations") or []
         locations = tuple(Location.from_dict(item) for item in locations_raw)
+        # Never raise into the host on malformed confidence/count fields
+        # (advisor-not-gate); valid payloads parse exactly as before.
+        try:
+            confidence = float(raw.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        try:
+            additional_location_count = int(raw.get("additional_location_count", 0) or 0)
+        except (TypeError, ValueError):
+            additional_location_count = 0
         return cls(
             fingerprint=str(raw.get("fingerprint", "")),
             rule_id=str(raw.get("rule_id", "")),
@@ -322,7 +362,7 @@ class Finding:
             capability=str(raw.get("capability", "")),
             severity=str(raw.get("severity", "")),
             effective_severity=str(raw.get("effective_severity", raw.get("severity", ""))),
-            confidence=float(raw.get("confidence", 0.0)),
+            confidence=confidence,
             evidence_kind=str(raw.get("evidence_kind", "")),
             static_only=bool(raw.get("static_only", False)),
             declared=bool(raw.get("declared", False)),
@@ -339,7 +379,7 @@ class Finding:
             llm_touched=bool(raw.get("llm_touched", False)),
             id=str(raw.get("id", "")),
             locations=locations,
-            additional_location_count=int(raw.get("additional_location_count", 0) or 0),
+            additional_location_count=additional_location_count,
             detail=tuple(dict(item) for item in raw.get("detail", ()) if isinstance(item, Mapping)),
         )
 
@@ -527,7 +567,10 @@ def run_engine(
     try:
         produced = engine.scan(bundle_ir, context)
     except Exception as exc:  # noqa: BLE001 — isolation IS the contract (D-CRASH)
-        attributed = slot_name or getattr(engine, "name", "<unnamed>")
+        if slot_name:
+            attributed = slot_name
+        else:
+            attributed = getattr(engine, "name", "<unnamed>")
         failure = engine_failure_finding(attributed, exc)
         if diagnostics is not None:
             diagnostics.record(
