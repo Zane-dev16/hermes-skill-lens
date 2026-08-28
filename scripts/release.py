@@ -280,7 +280,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("verify-core", help="offline verification of the embedded core pack")
-    sub.add_parser("check-signature-fresh", help="working tree vs committed signature")
+    fresh = sub.add_parser("check-signature-fresh", help="working tree vs committed signature")
+    # The check is ALWAYS strict (stale/rejected => exit 1); --strict exists so
+    # the CI contract in .github/workflows/rule-pack.yml parses cleanly.
+    fresh.add_argument(
+        "--strict",
+        action="store_true",
+        help="accepted for CI compatibility; the check is always strict",
+    )
 
     art = sub.add_parser("artifact", help="build deterministic signed artifact into dist/")
     art.add_argument("--out", default=None)
