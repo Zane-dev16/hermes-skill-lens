@@ -162,6 +162,22 @@ class PluginContextView:
 
     # -- durable state -------------------------------------------------------------
 
+    @property
+    def inline_scans(self) -> bool:
+        """Standalone one-shot seam: run every scan inline, never enqueue.
+
+        The ``lens`` console script (``skill_lens.console``) supplies a host
+        stand-in with ``inline_scans = True``: a one-shot CI process has no
+        reply path to protect and no worker thread to leave behind, so the
+        §11.5 queue-first contract is meaningless there. The persistent
+        JobManager stays plugin-process-only (host-provided contexts never
+        carry this attribute and default to False).
+        """
+        try:
+            return bool(getattr(self._raw, "inline_scans", False))
+        except Exception:  # noqa: BLE001 — defensive view law
+            return False
+
     def plugin_data_dir(self) -> Path:
         """Return this plugin's durable state directory (created if possible).
 

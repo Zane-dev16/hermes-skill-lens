@@ -26,19 +26,19 @@ E6 netgraph, E7 secretscan, and E8 depintel — all eight §4 engines.
 from __future__ import annotations
 
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..diagnostics import SEVERITY_INFO, DiagnosticsCollector
+from ..diagnostics import SEVERITY_ERROR, SEVERITY_INFO, DiagnosticsCollector
 from ..ingest import (
     DEFAULT_CEILINGS,
     Ceilings,
     load_bundle,
 )
 from ..ir import SkillIR
-from ..rules import RulePack, load_core_pack
+from ..rules import Rule, RulePack, load_core_pack
 from .base import (
     CODE_ENGINE_UNIMPLEMENTED,
     MAX_ATTACHED_LOCATIONS,
@@ -290,6 +290,97 @@ def current_context() -> ScanContext:
 
 
 # ---------------------------------------------------------------------------
+# Community-pack merge (SPEC §15; fail-closed, street-capped)
+# ---------------------------------------------------------------------------
+
+#: Street-profile cap for community rules (ratified): external findings
+#: DISPLAY at effective MEDIUM until a pack is promoted; pricing keeps
+#: reading the rule-assigned severity (D-041 hard boundary — scores stay
+#: recomputable, the cap is annotation + display only).
+EXTERNAL_STREET_CAP = "MEDIUM"
+
+
+_EXTERNAL_ANNOTATION = "[pack:{}"
+
+
+def _merge_external_packs(
+    pack: RulePack,
+    external_packs: Sequence[RulePack],
+    diags: DiagnosticsCollector,
+) -> tuple[RulePack, dict[str, str]]:
+    """Merge accepted community packs into the dispatch set, fail-closed.
+
+    Any external rule id equal to a CORE rule id (or to a rule of an
+    already-accepted pack) rejects THAT pack with an error diagnostic
+    (LNS-PACK-ID-COLLISION) — community rules share the LNS- space and
+    must never shadow core. Returns the merged pack (CORE identity
+    preserved: name/version/checksum keep reporting the governed core so
+    envelopes stay byte-stable) and the accepted rule-id→pack-name map.
+    """
+    from ..packpins import CODE_PACK_ID_COLLISION
+
+    taken = {rule.id for rule in pack.rules}
+    extra_rules: list[Rule] = []
+    names: dict[str, str] = {}
+    for ext in external_packs:
+        collide = sorted({rule.id for rule in ext.rules if rule.id in taken})
+        if collide:
+            diags.record(
+                CODE_PACK_ID_COLLISION,
+                f"pack {ext.name} rejected: rule id collision ({', '.join(collide)}) — "
+                "community rules share the LNS- space with core and must not shadow it",
+                severity=SEVERITY_ERROR,
+                path=ext.source_label,
+                detail={"pack": ext.name, "ids": collide},
+            )
+            continue
+        taken.update(rule.id for rule in ext.rules)
+        extra_rules.extend(ext.rules)
+        names.update({rule.id: ext.name for rule in ext.rules})
+    if not extra_rules:
+        return pack, names
+    merged = RulePack(
+        name=pack.name,
+        version=pack.version,
+        spec_version=pack.spec_version,
+        description=pack.description,
+        changelog=pack.changelog,
+        rules=tuple(sorted(tuple(pack.rules) + tuple(extra_rules), key=lambda rule: rule.id)),
+        source_label=pack.source_label,
+        _file_inputs=pack._file_inputs,
+    )
+    return merged, names
+
+
+def _annotate_external_findings(
+    findings: list[dict[str, Any]],
+    external_names: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Provenance-annotate external-rule findings; apply the street cap.
+
+    Pure: input dicts are copied, never mutated. Every external finding
+    gains ``[pack:<name>]``; CRITICAL/HIGH ones additionally gain the cap
+    annotation and ``effective_severity`` = MEDIUM (display only — the
+    ``severity`` field that prices the score is never rewritten, D-041).
+    """
+    annotated: list[dict[str, Any]] = []
+    for row in findings:
+        pack_name = external_names.get(str(row.get("rule_id", "")))
+        if pack_name is None:
+            annotated.append(row)
+            continue
+        out = dict(row)
+        notes = [str(item) for item in (out.get("annotations") or [])]
+        notes.append(f"[pack:{pack_name}]")
+        if str(out.get("severity")) in ("CRITICAL", "HIGH"):
+            notes.append(f"[street-cap:{pack_name} effective {EXTERNAL_STREET_CAP}]")
+            out["effective_severity"] = EXTERNAL_STREET_CAP
+        out["annotations"] = notes
+        annotated.append(out)
+    return annotated
+
+
+# ---------------------------------------------------------------------------
 # The scan pipeline spine (scorer-facing, Phase 1+)
 # ---------------------------------------------------------------------------
 
@@ -313,6 +404,7 @@ def scan_bundle(
     path_or_dir: str | Path,
     rules_pack: RulePack | None = None,
     *,
+    external_packs: Sequence[RulePack] = (),
     home: str | Path | None = None,
     ceilings: Ceilings = DEFAULT_CEILINGS,
     diagnostics: DiagnosticsCollector | None = None,
@@ -320,16 +412,31 @@ def scan_bundle(
 ) -> ScanResult:
     """Ingest + engine-dispatch + dedup one bundle (never raises).
 
-    ``rules_pack=None`` loads the embedded core pack. Findings carry
-    sequential report ids ``F-1..N`` assigned AFTER sort + dedup, so ids
-    are input-deterministic and stable across line shifts that preserve
-    detection content. When *deadline* is supplied it is consulted after
-    ingest and between engines; breach raises :class:`ScanDeadlineBreach`
-    (default ``None`` preserves the old contract exactly).
+    ``rules_pack=None`` loads the embedded core pack. ``external_packs``
+    (community packs, SPEC §15) are merged INTO the dispatch set after a
+    fail-closed id-collision check (any external id shadowing a core id —
+    or another accepted pack — rejects THAT pack with an error
+    diagnostic; advisor-safest); the envelope's ``rule_pack`` block keeps
+    reporting the CORE pack identity so vectors and downstream consumers
+    stay byte-stable. External-rule findings carry a ``[pack:<name>]``
+    provenance annotation and, under the street profile cap, an
+    ``effective_severity`` ceiling at MEDIUM — pricing keeps reading the
+    rule-assigned severity (D-041 hard boundary, scores recomputable).
+    Findings carry sequential report ids ``F-1..N`` assigned AFTER sort +
+    dedup, so ids are input-deterministic and stable across line shifts
+    that preserve detection content. When *deadline* is supplied it is
+    consulted after ingest and between engines; breach raises
+    :class:`ScanDeadlineBreach` (default ``None`` preserves the old
+    contract exactly).
     """
     pack = rules_pack if rules_pack is not None else load_core_pack()
     diags = diagnostics if diagnostics is not None else DiagnosticsCollector()
     target = Path(path_or_dir).expanduser()
+
+    merged = pack
+    external_names: dict[str, str] = {}  # rule id -> pack name (accepted only)
+    if external_packs:
+        merged, external_names = _merge_external_packs(pack, external_packs, diags)
 
     _check_deadline(deadline, "start")
     ir = load_bundle(target, home=home, ceilings=ceilings, diagnostics=diags)
@@ -338,7 +445,7 @@ def scan_bundle(
 
     token = set_scan_context(ctx)
     try:
-        findings = run_all(ir, pack.rules_by_engine(), diags, ctx=ctx, deadline=deadline)
+        findings = run_all(ir, merged.rules_by_engine(), diags, ctx=ctx, deadline=deadline)
     finally:
         reset_scan_context(token)
 
@@ -348,6 +455,8 @@ def scan_bundle(
         row = dict(finding)
         row["id"] = f"F-{index}"
         numbered.append(row)
+    if external_names:
+        numbered = _annotate_external_findings(numbered, external_names)
 
     return ScanResult(
         ir=ir,

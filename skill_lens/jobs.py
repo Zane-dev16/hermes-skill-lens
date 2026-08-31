@@ -88,7 +88,7 @@ class ScanContext:
     """
 
     baseline_records: tuple[Any, ...] = ()
-    key_suffix: str = ""
+    key_suffix: str = ""  # baseline + packs suffix folds into the cache identity
     report_date: date | None = None
     plugin_data_dir: Path | None = None
     cache: Any | None = None  # FastPathCache; typed loose to avoid import cycle
@@ -96,6 +96,9 @@ class ScanContext:
     #: network-free path byte-identical; True lazy-imports skill_lens.enrich.osv
     #: inside run_scan and splits the fast-path cache key (":osv" suffix).
     osv: bool = False
+    #: Accepted community packs (SPEC §15 pin table; pre-verified by
+    #: packpins.resolve_external_packs — the caller owns the trust decision).
+    external_packs: tuple[Any, ...] = ()
 
 
 @dataclass
@@ -135,6 +138,20 @@ class JobRecord:
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> JobRecord:
+        # Sidecar JSON is untrusted disk state: numeric coercions are guarded
+        # so a corrupt jobs.json recovers as a failed record, never a crash.
+        def _int(key: str, default: int) -> int:
+            try:
+                return int(data.get(key, default) or 0)
+            except (TypeError, ValueError):
+                return default
+
+        def _float(key: str, default: float) -> float:
+            try:
+                return float(data.get(key, default) or 0.0)
+            except (TypeError, ValueError):
+                return default
+
         return cls(
             job_id=str(data.get("job_id", "")),
             name=str(data.get("name", "")),
@@ -143,11 +160,11 @@ class JobRecord:
             target=str(data.get("target", "")),
             state=str(data.get("state", STATE_FAILED)),
             error=data.get("error"),
-            attempts=int(data.get("attempts", 0) or 0),
-            coalesced=int(data.get("coalesced", 0) or 0),
+            attempts=_int("attempts", 0),
+            coalesced=_int("coalesced", 0),
             fetched=bool(data.get("fetched", False)),
-            created=float(data.get("created", 0.0) or 0.0),
-            updated=float(data.get("updated", 0.0) or 0.0),
+            created=_float("created", 0.0),
+            updated=_float("updated", 0.0),
             context=None,
         )
 
@@ -209,6 +226,7 @@ def pipeline_runner(job: JobRecord) -> None:
         key_suffix=context.key_suffix,
         report_date=context.report_date,
         osv=getattr(context, "osv", False),
+        external_packs=getattr(context, "external_packs", ()) or (),
     )
     if not outcome.get("ok"):
         raise ScanFailure(_one_line(str(outcome.get("error") or "scan failed")))
@@ -275,8 +293,14 @@ class JobManager:
         self._data_dir = Path(plugin_data_dir)
         self._jobs_path = self._data_dir / "jobs.json"
         self._runner: Runner = runner if runner is not None else pipeline_runner
-        self._max_persisted = max(1, int(max_persisted))
-        self._shutdown_timeout = float(shutdown_timeout)
+        try:
+            self._max_persisted = max(1, int(max_persisted))
+        except (TypeError, ValueError):  # defensive: junk tuning degrades to default
+            self._max_persisted = MAX_PERSISTED_JOBS
+        try:
+            self._shutdown_timeout = float(shutdown_timeout)
+        except (TypeError, ValueError):
+            self._shutdown_timeout = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
 
         # One lock guards the job table AND its persistence; the Condition
         # shares it so waiters wake on every transition.
@@ -325,8 +349,12 @@ class JobManager:
                     break
             else:
                 self._seq += 1
+                try:
+                    seq_ms = int(now * 1000)
+                except (TypeError, ValueError):  # defensive: clock drift can never kill enqueue
+                    seq_ms = 0
                 job = JobRecord(
-                    job_id=f"j-{int(now * 1000)}-{self._seq:04d}",
+                    job_id=f"j-{seq_ms}-{self._seq:04d}",
                     name=name,
                     bundle_hash=bundle_hash,
                     cache_key=key,

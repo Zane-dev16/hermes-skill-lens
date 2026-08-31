@@ -1,24 +1,26 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]           # PEP 639 SPDX license expressions
 build-backend = "setuptools.build_meta"
 
 [project]
 # Distribution name per SPEC header: import package skill_lens, distribution
 # skill-lens. The repo (hermes-skill-lens) IS the Hermes plugin artifact; this
-# pyproject exists for metadata + tooling config, not for pip installs of the
-# plugin itself.
+# pyproject exists for metadata + tooling config, and — as of v1.0 — for the
+# standalone PyPI artifact (console script `lens`, SPEC §18 CLI-verbs surface).
 name = "skill-lens"
 version = "0.9.1"
 description = "Skill Lens — deterministic, advisor-only security scanner for Hermes agent skill bundles. A lens, not a bouncer."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Irell Zane" }]
 keywords = ["hermes", "agent", "skills", "security", "static-analysis"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 3 - Alpha",        # 5 - Production/Stable at the 1.0.0 cut (single-source bump)
+  "Environment :: Console",
   "Intended Audience :: End Users/Desktop",
-  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -27,7 +29,24 @@ classifiers = [
 ]
 dependencies = []
 
+[project.scripts]
+# The standalone console script shares skill_lens.cli's ONE grammar and §18
+# exit-code law with the host lane (skill_lens.console; SPEC §18 scope).
+lens = "skill_lens.console:main"
+
 [project.optional-dependencies]
+# Grammar lane for the AST engines (mirrors plugin.yaml's declared ranges).
+# WITHOUT these the wheel degrades to the golden-tested line-scanner lane —
+# that is the HONEST contract (D-034 degraded goldens are byte-identical).
+ast = [
+  "tree-sitter>=0.24,<0.27",
+  "tree-sitter-python>=0.23,<0.26",
+  "tree-sitter-javascript>=0.23,<0.26",
+  "tree-sitter-bash>=0.23,<0.26",
+]
+# Offline ed25519 verification backend (D-055). Without it doctor/rules
+# verify degrade to honest WARN; the sha256 pin still gates bytes.
+sig = ["cryptography>=42"]
 # Dev/test-only extras (the plugin runtime itself stays zero-dependency).
 dev = [
   "pytest>=8",
@@ -43,12 +62,20 @@ dev = [
 Homepage = "https://github.com/Zane-dev16/hermes-skill-lens"
 
 [tool.setuptools]
-packages = ["skill_lens", "skill_lens.engines"]
+packages = ["skill_lens", "skill_lens.engines", "skill_lens.enrich"]
 
 # The embedded core rule pack travels as package data so installed copies
-# load offline (D-RULEOWN); the repo checkout IS the plugin artifact.
+# load offline (D-RULEOWN); the committed PUBLIC key ships so `lens rules
+# verify` keeps offline provenance checking in installed copies (per-release
+# .sig files deliberately do NOT ship — absent sig = honest WARN lane).
+# wheels/, corpus/, tests/, build-state/, dist/, scripts/, tools/ stay OUT of
+# both sdist and wheel (keep packages explicit; no include_package_data blanket).
 [tool.setuptools.package-data]
-skill_lens = ["rules/core/pack.yaml", "rules/core/rules/*.yaml"]
+skill_lens = [
+  "rules/core/pack.yaml",
+  "rules/core/rules/*.yaml",
+  "keys/pack-signing.pub.pem",
+]
 
 [tool.ruff]
 line-length = 100

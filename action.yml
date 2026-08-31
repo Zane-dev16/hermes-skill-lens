@@ -1,0 +1,174 @@
+# Skill Lens — GitHub Action (composite; v1.0).
+#
+# Consumers:  uses: Zane-dev16/hermes-skill-lens@v1   (or pin the release SHA)
+#
+# SHA-pin law (supply-chain symmetry with lens's own D-055 posture): every
+# third-party step is pinned to a FULL 40-hex commit SHA — never a moving
+# tag. Lens itself is pinned by `lens-ref` (a full 40-hex commit SHA of this
+# repo — the SUPPORTED pin, reproducible bytes forever) or by an exact PyPI
+# version (`lens-source: pypi`, after publish). The repo's own CI greps this
+# file for tag pins and goes red (scripts/action_check.py).
+#
+# Advisor law at the boundary: the action never gates beyond the explicit
+# `fail-on` it documents. Default `fail-on: notice` IS the documented CI
+# stance (§8.4); set `fail-on: ''` to restore the pure advisor stance
+# (exit 0 always; SARIF still uploads when present).
+
+name: "Skill Lens scan"
+description: >-
+  Deterministic, advisor-only security scan for agent skill bundles
+  (Hermes Skill Lens). Writes canonical SARIF 2.1.0, optionally uploads
+  it to GitHub code scanning, and gates on the §18 exit-code contract.
+
+inputs:
+  path:
+    description: "Path (in the consumer repo) to the skill bundle/s to scan."
+    required: false
+    default: "."
+  fail-on:
+    description: >-
+      Verdict level that exits 1 (§8.4): clean|notice|warn|alert.
+      Default 'notice' is the documented CI stance; '' restores the
+      advisor stance (never gates; findings report only).
+    required: false
+    default: "notice"
+  lens-source:
+    description: "Where to install Skill Lens from: 'git' (default) or 'pypi'."
+    required: false
+    default: "git"
+  lens-ref:
+    description: >-
+      REQUIRED when lens-source=git: full 40-hex commit SHA of
+      Zane-dev16/hermes-skill-lens to install (the supported pin).
+    required: false
+    default: ""
+  lens-version:
+    description: "REQUIRED when lens-source=pypi: exact skill-lens version."
+    required: false
+    default: ""
+  python-version:
+    description: "Python version for actions/setup-python."
+    required: false
+    default: "3.12"
+  sarif-file:
+    description: "Where the scan writes raw canonical SARIF (--sarif-out)."
+    required: false
+    default: "lens-results.sarif"
+  upload-sarif:
+    description: >-
+      Upload sarif-file to GitHub code scanning (needs security-events:
+      write). Set false for fork/private repos without code scanning.
+    required: false
+    default: "true"
+
+outputs:
+  verdict:
+    description: "The envelope verdict string (clean|notice|warn|alert)."
+    value: ${{ steps.gate.outputs.verdict }}
+  exit-code:
+    description: "The §18 exit code: 0 pass · 1 fail-on breach · 2 total error."
+    value: ${{ steps.scan.outputs.exit-code }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check out the consumer repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Set up Python
+      uses: >-
+        actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install pinned Skill Lens
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        if [ "${{ inputs.lens-source }}" = "pypi" ]; then
+          if [ -z "${{ inputs.lens-version }}" ]; then
+            echo "::error::lens-version is REQUIRED when lens-source=pypi"
+            exit 1
+          fi
+          python -m pip install "skill-lens[sig]==${{ inputs.lens-version }}"
+        else
+          ref="${{ inputs.lens-ref }}"
+          if [ -z "$ref" ]; then
+            echo "::error::lens-ref is REQUIRED when lens-source=git"
+            echo "::error::(a full 40-hex commit SHA — the supported pin)"
+            exit 1
+          fi
+          if ! [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::lens-ref must be a FULL 40-hex commit SHA"
+            echo "::error::(never a branch/tag; supply-chain law)"
+            exit 1
+          fi
+          python -m pip install \
+            "git+https://github.com/Zane-dev16/hermes-skill-lens.git@${ref}"
+          # offline signature verification backend (D-055)
+          python -m pip install "cryptography>=42"
+        fi
+
+    # The gate must not eat the SARIF upload: continue-on-error captures the
+    # §18 exit code (0 pass · 1 --fail-on breach · 2 total error) without
+    # failing the job yet; the gate step below honors it exactly. Exit 2
+    # uploads NOTHING (a partial/missing SARIF would lie) and fails loud.
+    - name: Scan (advisor findings → SARIF; exit code captured)
+      id: scan
+      continue-on-error: true
+      shell: bash
+      env:
+        NO_COLOR: "1" # §12.1: CI logs stay ASCII
+      run: |
+        lens scan "${{ inputs.path }}" \
+          --sarif-out "${{ inputs.sarif-file }}" \
+          --plain --json --fail-on "${{ inputs.fail-on }}" | tee lens-output.txt
+        code="${PIPESTATUS[0]}"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to GitHub code scanning
+      if: steps.scan.outputs.exit-code != '2' && inputs.upload-sarif == 'true'
+      uses: >-
+        github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: lens
+
+    # Explicit gate step honoring 0/1/2 exactly: 0 pass, 1 threshold breach
+    # (§8.4 CI contract), 2 total error (loud). The verdict rides the step
+    # summary; the action output carries it for downstream jobs.
+    - name: Gate on the §18 exit-code contract
+      id: gate
+      if: always()
+      shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+      run: |
+        code="${{ steps.scan.outputs.exit-code }}"
+        verdict="unknown"
+        if [ -f "$SARIF_FILE" ]; then
+          pat='"verdict" *: *"[a-z]+"'
+          hit="$(grep -oE "$pat" "$SARIF_FILE" | head -n 1 || true)"
+          verdict="$(printf '%s' "$hit" | sed -E 's/.*"([a-z]+)"$/\1/')"
+          [ -n "$verdict" ] || verdict="unknown"
+        fi
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Skill Lens scan"
+          echo
+          echo "verdict: **$verdict** · exit-code: \`$code\`"
+          echo "fail-on: \`${FAIL_ON}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$code" = "2" ]; then
+          echo "::error::Skill Lens total error (exit 2); no SARIF uploaded"
+          tail -n 20 lens-output.txt 2>/dev/null || true
+          exit 1
+        fi
+        if [ "$code" = "1" ]; then
+          echo "::error::verdict at/beyond --fail-on $FAIL_ON (exit 1; §8.4)"
+          tail -n 20 lens-output.txt 2>/dev/null || true
+          exit 1
+        fi
+        echo "Skill Lens scan passed (exit 0; advisor contract honored)."

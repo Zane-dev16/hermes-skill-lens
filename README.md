@@ -39,7 +39,35 @@ Skill Lens is an **advisor, not a gate**: it registers observer hooks only (`on_
 
 Rule packs travel signed and version-pinned with the plugin (`YYYY.MM.N`,
 SPEC §15). Verify provenance any time: `hermes lens rules verify`. Updates
-are manual-only by design.
+are manual-only by design. Community packs are opt-in and SHA-pinned via
+`.lens/packs.toml` (local-path-only, fail-closed; see `lens rules list`).
+
+## Standalone CLI (PyPI)
+
+The same engine ships as a zero-dependency pure-Python package with a
+`lens` console script (one grammar, one §18 exit-code law with the host
+lane; the wheel degrades to the golden-tested line-scanner lane without
+grammars — that is the honest contract):
+
+```bash
+pip install skill-lens[sig]      # + [ast] for the AST grammar lane
+lens scan ./my-skill --json
+lens scan ./my-skill --fail-on notice --sarif-out lens-results.sarif
+```
+
+## CI (GitHub Action)
+
+```yaml
+- uses: Zane-dev16/hermes-skill-lens@v1   # pin the release SHA to audit
+  with:
+    path: ./skills
+    fail-on: notice
+    lens-source: git
+    lens-ref: <full 40-hex commit SHA>   # the supported pin
+```
+
+Writes canonical SARIF, uploads to code scanning (guarded on exit 2), and
+gates on the §18 contract. See `docs/github-action.md`.
 
 ## Status
 

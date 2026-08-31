@@ -35,3 +35,88 @@ jobs:
         # Explicit schema gate over generated reports (vendored OASIS schema;
         # tests/test_report_sarif.py remains the exhaustive validator).
         run: python3 scripts/sarif_check.py
+
+  packaging:
+    # v1.0 deliverable (b): build the distribution and prove the standalone
+    # `lens` console script from a clean venv WITHOUT extras — the grammar-less
+    # wheel is the honest contract (degraded goldens byte-exact, D-034).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel, twine check
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Wheel must be pure-Python and grammar-less
+        run: |
+          wheel=$(ls dist/skill_lens-*.whl)
+          python - <<'PY'
+          import zipfile, sys, glob
+          wheel = glob.glob("dist/skill_lens-*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          bad = [n for n in names if n.startswith("wheels/")]
+          assert not bad, f"vendored grammar wheels must NOT ship: {bad[:3]}"
+          assert "skill_lens/keys/pack-signing.pub.pem" in names, "pubkey missing"
+          assert "skill_lens/rules/core/pack.yaml" in names, "core pack missing"
+          assert not any(n.startswith(("corpus/", "tests/", "scripts/")) for n in names)
+          print("wheel manifest OK (grammar-less, keys shipped, no test tree)")
+          PY
+      - name: Clean-venv smoke (no extras) + exit-code matrix + doctor
+        # PyYAML is a host-provided runtime dep (plugin.yaml seam), NOT an
+        # extra; grammars stay ABSENT so the degraded lane is what runs.
+        run: |
+          python -m venv /tmp/lens-venv
+          /tmp/lens-venv/bin/pip install --upgrade pip
+          /tmp/lens-venv/bin/pip install dist/skill_lens-*.whl PyYAML
+          /tmp/lens-venv/bin/lens --help >/dev/null
+          /tmp/lens-venv/bin/lens scan corpus/fixtures/benign/pinned-deps-helper \
+            --json >/dev/null
+          /tmp/lens-venv/bin/lens scan corpus/fixtures/benign/pinned-deps-helper
+          test "$?" = "0" || exit 1
+          /tmp/lens-venv/bin/lens scan corpus/fixtures/malicious/committed-keys \
+            --fail-on notice >/dev/null
+          test "$?" = "1" || exit 1
+          rm -rf /tmp/broken-policy && cp -r corpus/fixtures/benign/pinned-deps-helper \
+            /tmp/broken-policy
+          mkdir -p /tmp/broken-policy/.lens
+          printf 'profile = [\n' > /tmp/broken-policy/.lens/policy.toml
+          /tmp/lens-venv/bin/lens scan /tmp/broken-policy >/dev/null 2>&1
+          test "$?" = "2" || exit 1
+          /tmp/lens-venv/bin/lens doctor --plain | tail -n 1
+          /tmp/lens-venv/bin/lens rules verify | tail -n 2
+      - name: Degraded-parity goldens against the INSTALLED wheel
+        # Copy the test tree out of the repo so the INSTALLED wheel's
+        # skill_lens is imported (D-034: degraded goldens byte-exact).
+        run: |
+          /tmp/lens-venv/bin/pip install pytest
+          rm -rf /tmp/parity && mkdir -p /tmp/parity && cp -r tests /tmp/parity/tests
+          cd /tmp && /tmp/lens-venv/bin/python -m pytest /tmp/parity/tests/test_parsing_golden.py -q
+      - name: Import contract against the INSTALLED tree (zero network)
+        # Static scan EXCLUDES skill_lens/enrich/ — the OPT-IN --osv lane is
+        # the one sanctioned network module (SPEC §14 G2, D-PRIVACY).
+        run: |
+          SITE=$(cd /tmp && /tmp/lens-venv/bin/python -c \
+            "import skill_lens, pathlib; print(pathlib.Path(skill_lens.__file__).parent)")
+          if grep -rnE "^(import|from) (socket|ssl|urllib|http|ftplib|smtplib)\b" \
+              --include='*.py' --exclude-dir=enrich "$SITE"; then
+            echo "::error::network import in shipped default closure"; exit 1
+          fi
+          echo "installed-tree import contract: CLEAN"
+
+  action-schema:
+    # v1.0 deliverable (c): composite-action contract — YAML parse, input
+    # contract, 40-hex SHA-pin grep test (a tag pin anywhere = red).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate action.yml (composite contract + SHA pins)
+        run: |
+          python -m pip install --upgrade pip pyyaml
+          python3 scripts/action_check.py

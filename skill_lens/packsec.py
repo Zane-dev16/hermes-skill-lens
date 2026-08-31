@@ -269,9 +269,7 @@ def canonical_pack_inputs(pack_dir: Path | str) -> list[tuple[str, bytes]]:
     for rule_path in sorted(rules_root.glob("*.yaml")):
         if rule_path.is_file():
             try:
-                inputs.append(
-                    (f"{rules_dir}/{rule_path.name}", rule_path.read_bytes())
-                )
+                inputs.append((f"{rules_dir}/{rule_path.name}", rule_path.read_bytes()))
             except OSError as exc:
                 raise PackSecError(
                     f"rule file unreadable ({rule_path.name}): {exc.strerror}"
@@ -344,9 +342,7 @@ def sign_digest(private_key_bytes: bytes, digest: bytes) -> bytes:
 def verify_digest(public_key_bytes: bytes, digest: bytes, sig: bytes) -> VerifyResult:
     """Offline verification; NEVER raises — failures come back as values."""
     if not backend_available():
-        return VerifyResult(
-            False, "no ed25519 backend available (install 'cryptography')"
-        )
+        return VerifyResult(False, "no ed25519 backend available (install 'cryptography')")
     try:
         pub = _load_public(public_key_bytes)
     except PackSecError as exc:
@@ -458,9 +454,29 @@ def locate_core_keys(root: Path | None = None) -> tuple[Path | None, Path | None
     Either may be None (dev trees, pre-ceremony states). When several sig
     files exist the lexicographically LAST wins (release tooling keeps
     exactly one; the tiebreak stays deterministic).
+
+    Package-data fallback (v1.0 packaging): when the plugin-root layout
+    carries no ``keys/pack-signing.pub.pem`` (installed wheels —
+    ``site-packages`` has no ``keys/`` beside the package), the committed
+    PUBLIC key shipped as package data (``skill_lens/keys/``) keeps
+    offline provenance checking alive. Per-release ``.sig`` sidecars do
+    NOT ship, so installed copies land on the honest WARN lane (checksum
+    pins bytes, not origin).
     """
     base = plugin_root() if root is None else root
     pub = base / CORE_PUBKEY_RELPATH
+    if not pub.is_file() and root is None:
+        try:
+            from importlib.resources import files
+
+            packaged = (
+                Path(str(files(__package__ or "skill_lens") / "keys"))
+                / Path(CORE_PUBKEY_RELPATH).name
+            )
+            if packaged.is_file():
+                pub = packaged
+        except (ImportError, TypeError, OSError):
+            pass
     sigs = sorted(base.glob(CORE_SIG_GLOB))
     return (pub if pub.is_file() else None), (sigs[-1] if sigs else None)
 
@@ -574,6 +590,198 @@ def verify_core_signature(
     )
 
 
+# ---------------------------------------------------------------------------
+# External (community) pack verification — shared value object
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExternalPackReport:
+    """Doctor/verb-grade outcome of verifying one EXTERNAL (community) pack.
+
+    Same value-object discipline as :class:`CoreSignatureReport`: never
+    raises, so the three consuming surfaces (scan registration, ``rules
+    verify``, doctor check 1) cannot drift. ``status`` follows the core
+    vocabulary ("pass" | "warn" | "fail") and ``accepted`` states the
+    load decision outright — a WARN with ``accepted=False`` (missing pin)
+    is a rejection without tamper evidence, while a WARN with
+    ``accepted=True`` (signature declared, no crypto backend) keeps the
+    pack usable because the sha256 pin still gates the bytes.
+    """
+
+    status: str
+    lines: tuple[str, ...]
+    name: str
+    #: Machine reason kind: missing-pin | pin (digest mismatch) | loader |
+    #: sig | backend | empty string (clean pass). Mapped to stable
+    #: diagnostic codes by the caller.
+    kind: str = ""
+    reason: str = ""
+    accepted: bool = False
+    checksum: str = ""
+    fingerprint_short: str = ""
+
+
+def verify_external_pack(
+    *,
+    path: Path | str,
+    name: str,
+    sha256_pin: str,
+    sig_path: Path | str | None = None,
+    pubkey_path: Path | str | None = None,
+) -> ExternalPackReport:
+    """Verify one external pack against its pin (offline; never raises).
+
+    Order is normative (SPEC §15 flow): structural load, digest-vs-pin,
+    then the OPTIONAL detached signature. Every step fails closed:
+
+    1. loader fault (bad YAML/dup id/unknown engine/…) → FAIL ("loader");
+    2. canonical digest over :func:`canonical_pack_inputs` MUST equal
+       *sha256_pin* byte-for-byte → mismatch = FAIL ("pin", the
+       tamper lane); an empty pin = WARN-grade rejection ("missing-pin");
+    3. signature OPTIONAL: present-but-invalid = FAIL ("sig"); declared
+       but no crypto backend = WARN ("backend") with the pack still
+       accepted on its pin; absent = clean pass with a note.
+    """
+    from .rules import RulePackError, load_pack
+
+    label = f"pack {name}"
+    try:
+        load_pack(path)
+    except RulePackError as exc:
+        return ExternalPackReport(
+            "fail",
+            (f"{label}: LOADER REJECTED — {exc}",),
+            name,
+            kind="loader",
+            reason=f"loader rejected ({exc})",
+        )
+    try:
+        digest = canonical_digest(canonical_pack_inputs(path)).hex()
+    except PackSecError as exc:
+        return ExternalPackReport(
+            "fail",
+            (f"{label}: digest unreadable — {exc}",),
+            name,
+            kind="pin",
+            reason=f"digest unreadable ({exc})",
+        )
+    checksum = digest_label(bytes.fromhex(digest))
+    if not sha256_pin:
+        return ExternalPackReport(
+            "warn",
+            (
+                f"{label}: no sha256 pin — REJECTED (a pin you wrote is a trust "
+                "decision; its absence is a config fault)",
+                checksum,
+            ),
+            name,
+            kind="missing-pin",
+            reason="missing sha256 pin",
+            checksum=checksum,
+        )
+    if digest != sha256_pin.lower():
+        return ExternalPackReport(
+            "fail",
+            (
+                f"{label}: PIN MISMATCH — pack bytes do not match the pinned digest",
+                f"pinned  sha256:{sha256_pin}",
+                f"actual  {checksum}",
+                "treat these pack bytes as untrusted; re-pin only after authorizing "
+                "the change (manual-only updates, D-RULEOWN)",
+            ),
+            name,
+            kind="pin",
+            reason="digest does not match the pinned sha256",
+            checksum=checksum,
+        )
+    if sig_path is None:
+        return ExternalPackReport(
+            "pass",
+            (
+                f"{label}: pin-match ok · {checksum[:15]}… (unsigned — checksum "
+                "pins bytes, not origin)",
+            ),
+            name,
+            reason="sha256 pin verified",
+            accepted=True,
+            checksum=checksum,
+        )
+    if not backend_available():
+        return ExternalPackReport(
+            "warn",
+            (
+                f"{label}: pin-match ok · {checksum[:15]}…; signature present but no "
+                "crypto backend — accepted on its sha256 pin, origin unproven",
+            ),
+            name,
+            kind="backend",
+            reason="signature present but no ed25519 backend (install 'cryptography')",
+            accepted=True,
+            checksum=checksum,
+        )
+    pub_bytes: bytes | None = None
+    if pubkey_path is not None:
+        try:
+            pub_bytes = load_public_key_file(pubkey_path)
+        except PackSecError as exc:
+            return ExternalPackReport(
+                "fail",
+                (f"{label}: trust root unreadable — {exc}",),
+                name,
+                kind="sig",
+                reason=f"pubkey unreadable ({exc})",
+                checksum=checksum,
+            )
+    else:
+        default_pub, _ = locate_core_keys()
+        if default_pub is not None:
+            pub_bytes = default_pub.read_bytes()
+    if pub_bytes is None:
+        return ExternalPackReport(
+            "fail",
+            (f"{label}: signature declared but no public key available",),
+            name,
+            kind="sig",
+            reason="signature declared but no pubkey (pass one via the pin)",
+            checksum=checksum,
+        )
+    try:
+        sig = read_sig_file(sig_path)[1]
+    except PackSecError as exc:
+        return ExternalPackReport(
+            "fail",
+            (f"{label}: SIGNATURE REJECTED — {exc}", checksum),
+            name,
+            kind="sig",
+            reason=f"signature unreadable ({exc})",
+            checksum=checksum,
+        )
+    result = verify_digest(pub_bytes, bytes.fromhex(digest), sig)
+    if result.ok:
+        return ExternalPackReport(
+            "pass",
+            (f"{label}: pin-match ok · signature verified ({result.fingerprint})",),
+            name,
+            reason="sha256 pin + signature verified",
+            accepted=True,
+            checksum=checksum,
+            fingerprint_short=result.fingerprint,
+        )
+    return ExternalPackReport(
+        "fail",
+        (
+            f"{label}: SIGNATURE REJECTED — {result.reason}",
+            checksum,
+            "verification FAILED loudly: treat these pack bytes as untrusted",
+        ),
+        name,
+        kind="sig",
+        reason=f"signature rejected ({result.reason})",
+        checksum=checksum,
+    )
+
+
 __all__ = [
     "CORE_PUBKEY_RELPATH",
     "CORE_SIG_GLOB",
@@ -581,6 +789,7 @@ __all__ = [
     "PackSecError",
     "VerifyResult",
     "backend_name",
+    "ExternalPackReport",
     "build_artifact",
     "canonical_digest",
     "canonical_pack_inputs",
@@ -594,5 +803,6 @@ __all__ = [
     "sign_digest",
     "verify_core_signature",
     "verify_digest",
+    "verify_external_pack",
     "write_sig_file",
 ]

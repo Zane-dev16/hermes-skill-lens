@@ -117,11 +117,17 @@ def build_cli_handler(view: Any, cache: Any) -> Any:
             # §11.9 exit policy lives in the report itself: 0 even on
             # warnings, 2 on any hard check failure. The doctor verb stashes
             # it in the sink; text-prefix heuristics and --fail-on don't apply.
-            return int(sink.get("doctor_exit", 0))
+            try:
+                return int(sink.get("doctor_exit", 0))
+            except (TypeError, ValueError):  # junk sink value can never fake a clean run
+                return POLICY_EXIT_CODE
         if verb == "rules":
             # §18 total-error semantics: a REJECTED rule-pack verification is
             # a checksum/provenance failure (exit 2); pass/warn exits 0.
-            return int(sink.get("rules_exit", 0))
+            try:
+                return int(sink.get("rules_exit", 0))
+            except (TypeError, ValueError):
+                return POLICY_EXIT_CODE
         if text.startswith(_FAIL_PREFIXES) or _USAGE_MARKER in text.splitlines()[0]:
             return POLICY_EXIT_CODE
         return _fail_on_exit_code(namespace, sink)
@@ -169,6 +175,9 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
             tokens.append("--sarif")
         if getattr(namespace, "osv", False):
             tokens.append("--osv")
+        sarif_out = getattr(namespace, "sarif_out", None)
+        if sarif_out:
+            tokens.extend(["--sarif-out", str(sarif_out)])
         common_flags()
     elif verb == "report":
         name = getattr(namespace, "name", None)
@@ -178,6 +187,9 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
             tokens.append("--sarif")
         if getattr(namespace, "json", False):
             tokens.append("--json")
+        sarif_out = getattr(namespace, "sarif_out", None)
+        if sarif_out:
+            tokens.extend(["--sarif-out", str(sarif_out)])
         common_flags()
     elif verb == "map":
         target = getattr(namespace, "target", None)
@@ -234,9 +246,9 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
         path = getattr(namespace, "path", None)
         sig = getattr(namespace, "sig", None)
         pubkey = getattr(namespace, "pubkey", None)
-        # Default action is implicit; emit it only when a path/flag needs an
-        # anchor so token reconstruction stays canonical either way.
-        if path or sig or pubkey:
+        # The implicit default is ``verify``; emit an anchor whenever an
+        # action/flag needs one so token reconstruction stays canonical.
+        if path or sig or pubkey or (action and action != "verify"):
             tokens.append(action or "verify")
         if path:
             tokens.append(str(path))
@@ -267,6 +279,9 @@ def setup_parser(parser: Any) -> None:
     p_scan.add_argument("--json", action="store_true")
     p_scan.add_argument("--no-cache", dest="no_cache", action="store_true")
     p_scan.add_argument("--sarif", action="store_true")
+    # Machine lane: raw canonical SARIF written atomically (GitHub Action
+    # upload-sarif consumers; §12.4). Fence behavior unchanged (goldens safe).
+    p_scan.add_argument("--sarif-out", dest="sarif_out", default=None)
     # SPEC §14 G2: OSV.dev enrichment is OPT-IN network — the flag is the
     # only route; the default path stays socket-free (import-contract tested).
     p_scan.add_argument("--osv", action="store_true")
@@ -276,6 +291,7 @@ def setup_parser(parser: Any) -> None:
     p_report.add_argument("name", nargs="?", default=None)
     p_report.add_argument("--json", action="store_true")
     p_report.add_argument("--sarif", action="store_true")
+    p_report.add_argument("--sarif-out", dest="sarif_out", default=None)
     _add_common_flags(p_report)
 
     p_baseline = subparsers.add_parser("baseline", help="baseline current fingerprints")
@@ -314,7 +330,8 @@ def setup_parser(parser: Any) -> None:
 
     p_rules = subparsers.add_parser(
         "rules",
-        help="rule-pack governance: verify [path] [--sig F] [--pubkey F] (offline; §15)",
+        help="rule-pack governance: verify [path] [--sig F] [--pubkey F] · "
+        "list [dir] (offline; §15)",
     )
     p_rules.add_argument("action", nargs="?", default="verify")
     p_rules.add_argument("path", nargs="?", default=None)

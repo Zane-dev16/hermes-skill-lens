@@ -78,3 +78,96 @@ gh release view v0.9.1 --json assets --jq '.assets[].name'
 Each release should list exactly two assets: the pack zip and its `.sig`.
 Asset SHA256 must match the value recorded in the annotated tag message
 (`git tag -v` / `git cat-file tag v0.9.1`).
+
+## PyPI publish — TestPyPI-first (v1.0, owner-run, SHA-pinned)
+
+This box holds **no PyPI or GitHub tokens** (D-064 posture) — publishing is
+owner-run. The package name `skill-lens` and the console script `lens` MUST be
+checked for collisions on TestPyPI **before** any real publish.
+
+### Name-collision pre-check
+
+```sh
+# PyPI project name availability (TestPyPI first, then PyPI)
+curl -s https://test.pypi.org/simple/skill-lens/ | head -n 20
+curl -s https://pypi.org/simple/skill-lens/ | head -n 20
+# If either returns 200 with content, the name is taken.
+
+# Console-script collision (TestPyPI wheel install in a clean venv)
+python -m venv /tmp/lens-publish-check
+/tmp/lens-publish-check/bin/pip install --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ skill-lens --dry-run 2>&1 | head -n 20
+# Search https://test.pypi.org/project/skill-lens/ for an existing console_script `lens`.
+```
+
+### Publish workflow (SHA-pinned, Trusted Publisher)
+
+Tag-triggered workflow (`.github/workflows/publish.yml`, owner-maintained) uses
+the SHA-pinned action:
+
+```yaml
+- uses: pypa/gh-action-pypi-publish@67fea6c8c4b9bec66d6d4759856e03bf7f3a082ae  # v1.13.0
+  with:
+    repository-url: https://test.pypi.org/legacy/  # TestPyPI first
+```
+
+1. Owner stores a **TestPyPI API token** as repository secret `TEST_PYPI_API_TOKEN`
+   (or project-scoped trusted publisher) — this token never touches the
+   build box.
+2. On annotated tag push `v1.0.0` (cut by `scripts/release.py` which bumps
+   plugin.yaml + pyproject.toml together — single-source version law), the
+   workflow builds sdist+wheel (`python -m build`) and publishes to TestPyPI
+   via the SHA-pinned action.
+
+### TestPyPI smoke (owner-run, clean venv)
+
+```sh
+python -m venv /tmp/lens-testpypi-smoke
+/tmp/lens-testpypi-smoke/bin/pip install --upgrade pip
+/tmp/lens-testpypi-smoke/bin/pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  skill-lens
+/tmp/lens-testpypi-smoke/bin/lens --help
+/tmp/lens-testpypi-smoke/bin/lens scan corpus/fixtures/benign/pinned-deps-helper --json >/dev/null
+python -m twine check dist/*   # already gated in ci packaging job
+```
+
+If the smoke passes (exit-code matrix 0/1/2 as in ci `packaging` job, degraded
+goldens byte-exact without `[ast]` extras), proceed to PyPI.
+
+### PyPI (Trusted Publisher, no long-lived secret)
+
+Once the TestPyPI artifact is verified, the project is registered on PyPI
+(`skill-lens` ownership claimed). Publishing then switches to
+**Trusted Publisher (OIDC)** — no long-lived secret stored:
+
+```yaml
+# PyPI Trusted Publisher — uses id-token, no api-token secret
+permissions:
+  id-token: write
+  contents: read
+- uses: pypa/gh-action-pypi-publish@67fea6c8c4b9bec66d6d4759856e03bf7f3a082ae
+  # no repository-url → defaults to https://upload.pypi.org/legacy/
+```
+
+Configure the publisher at https://pypi.org/manage/account/publishing/ with
+repository `Zane-dev16/hermes-skill-lens`, workflow `publish.yml`, environment
+`pypi`. After that, the same tag push publishes to PyPI with an ephemeral
+`id-token` — owner-run, no token material on any developer box.
+
+### Order of record
+
+1. `scripts/release.py cut --plugin-version 1.0.0` (single-source bump, signed
+   artifact `dist/lens-core-pack-YYYY.MM.N.zip` unchanged by packaging).
+2. `git push origin v1.0.0` (SSH tag push is the release per D-064).
+3. Publish workflow → TestPyPI (SHA-pinned action).
+4. Clean-venv smoke from TestPyPI (above).
+5. Re-run workflow targeting PyPI (or re-tag with Trusted Publisher) — first
+   PyPI version is `1.0.0`.
+
+### Post-publish self-dogfood
+
+After the first PyPI publish, enable the repo-owned dogfood workflow that
+consumes `action.yml` with `lens-source: pypi` and `lens-version: 1.0.0`
+(gated behind the owner credential setup above).

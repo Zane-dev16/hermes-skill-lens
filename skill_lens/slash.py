@@ -91,7 +91,11 @@ verbs:
                        start/stop toggle the opt-in continuous poller
   rules verify [path]  offline provenance check of the embedded core pack
                        against the committed ed25519 pubkey (§15); a path
-                       verifies an external/community pack instead
+                       verifies an external/community pack instead; no-arg
+                       also reports the .lens/packs.toml pin table (one line
+                       per pack)
+  rules list [dir]     core + every pinned community pack: version, rule
+                       count, checksum, pin-match (sorted, deterministic)
   doctor               nine-check §11.9 self-check: pack, policy, state dirs,
                        host env, wiring audit (zero blocking hooks), network
                        isolation, lifecycle, parse, render — verdict line last
@@ -99,24 +103,32 @@ verbs:
 
 also hiding: /lens bones · /lens lens   (easter eggs; opt-in by invocation)
 
-flags (scan): --json · --no-cache · --sarif (SARIF 2.1.0 fence) · --osv or
+flags (scan): --json · --no-cache · --sarif (SARIF 2.1.0 fence) ·
+--sarif-out FILE (raw canonical SARIF, atomic write; machine lane) · --osv or
 osv:true (OPT-IN network enrichment via OSV.dev; findings tagged enriched) ·
 --fail-on clean|notice|warn|alert (CLI exit-code gate; §8.4/§18) ·
 --plain (ASCII headers, box drawing stripped)
-also: report --fail-on/--plain · diff --plain
+also: report --fail-on/--sarif-out/--plain · diff --plain · diff --plain
 
 advisor only — lens never blocks installs. clean scan ≠ safe skill.\
 ```"""
 
 _RULES_USAGE = """\
 ```\
-usage: /lens rules verify [path] [--sig FILE] [--pubkey FILE]
+usage: /lens rules list [dir] | rules verify [path] [--sig FILE] [--pubkey FILE]
 
 No path: verify the embedded core pack against the committed
-ed25519 public key and detached signature (offline; SPEC §15).
-With path: structurally load an external/community pack and report
-its version + content checksum; add --sig (and --pubkey for a
-third-party trust root) to verify a detached release signature.
+ed25519 public key and detached signature (offline; SPEC §15),
+then report every .lens/packs.toml pin (one line per pack:
+pass/rejected + reason). With path: structurally load an
+external/community pack and report its version + content
+checksum; add --sig (and --pubkey for a third-party trust root)
+to verify a detached release signature.
+
+list: core plus every pinned community pack — version, rule
+count, checksum, pin-match (sorted, no wall-clock). Pins live in
+<project>/.lens/packs.toml and $XDG_CONFIG_HOME/lens/packs.toml;
+sha256 pins are REQUIRED and fail-closed.
 
 Updates are MANUAL ONLY (no fetch verb, no network, ever):
 download a release artifact yourself, then let this verb prove
@@ -233,6 +245,7 @@ def run_scan(
     key_suffix: str = "",
     report_date: date | None = None,
     osv: bool = False,
+    external_packs: tuple[Any, ...] = (),
 ) -> dict[str, Any]:
     """One full pipeline pass; returns render inputs, never raises.
 
@@ -253,13 +266,19 @@ def run_scan(
     appends ":osv" to the cache key so enriched answers never serve plain
     requests or vice versa. Enrichment failures degrade into the summary
     block; they can never fail the scan.
+
+    *external_packs* are accepted community :class:`~skill_lens.rules.RulePack`
+    objects (already pin-verified by :func:`skill_lens.packpins.resolve_external_packs`
+    — the caller owns the fail-closed trust decision) merged into the
+    dispatch set; the caller must fold the packs suffix into *key_suffix*
+    so fast-path answers never serve a different pin state.
     """
     from .engines import scan_bundle
 
     start = time.monotonic()
     deadline = _deadline_from_start(start)
 
-    result = scan_bundle(target_path, deadline=deadline)
+    result = scan_bundle(target_path, external_packs=external_packs, deadline=deadline)
     ir = result.ir
     effective_suffix = key_suffix + (":osv" if osv else "")
     key = key_for_ir(ir) + effective_suffix
@@ -320,6 +339,36 @@ def run_scan(
 # ---------------------------------------------------------------------------
 
 
+def _write_scan_sarif_out(
+    envelope: Any,
+    sarif_out: str,
+    text: str,
+    display_name: str,
+) -> str:
+    """Write ``--sarif-out FILE`` (canonical SARIF, atomic); returns text.
+
+    On success *text* gains one ``lens sarif-out · wrote …`` line. On a
+    missing/unparsable envelope or an unwritable path the text becomes a
+    ``lens fail`` line — writing the requested artifact is the point of
+    the flag, so failing it can never read as a clean run (§18 honesty).
+    """
+    from .report import write_sarif_file
+
+    if not isinstance(envelope, dict):
+        return (
+            f"lens fail scan · cannot write --sarif-out — no completed envelope "
+            f"for {display_name!r}"
+        )
+    try:
+        write_sarif_file(envelope, sarif_out)
+    except OSError as exc:
+        reason = getattr(exc, "strerror", None)
+        if not reason:
+            reason = exc.__class__.__name__
+        return f"lens fail scan · cannot write --sarif-out {sarif_out!r}: {reason}"
+    return f"{text}\nlens sarif-out · wrote {sarif_out}"
+
+
 def _verb_scan(
     args: list[str],
     *,
@@ -336,13 +385,24 @@ def _verb_scan(
     rest, fail_on, fail_errors = _split_flag(args, "--fail-on")
     if fail_errors:
         return f"lens fail scan · {fail_errors[0]}"
+    rest, sarif_out, sarif_errors = _split_flag(rest, "--sarif-out")
+    if sarif_errors:
+        return f"lens fail scan · {sarif_errors[0]}"
     want_json = "--json" in rest
     want_sarif = "--sarif" in rest
     # SPEC §4 E8 / §14 G2: OSV.dev enrichment is opt-in ONLY. Both token
     # spellings are honored: CLI-style ``--osv`` and the slash-native
     # ``osv:true`` (a bare ``osv:true`` is a flag VALUE token, not positional).
     osv = "--osv" in rest or "osv:true" in rest
-    known_flags = ("--json", "--no-cache", "--sarif", "--osv", "--fail-on", "--plain")
+    known_flags = (
+        "--json",
+        "--no-cache",
+        "--sarif",
+        "--osv",
+        "--fail-on",
+        "--sarif-out",
+        "--plain",
+    )
     positional = [a for a in rest if not a.startswith("--") and a != "osv:true"]
     no_cache = "--no-cache" in rest
     unknown_flags = [a for a in rest if a.startswith("--") and a not in known_flags]
@@ -365,7 +425,20 @@ def _verb_scan(
     # Config-seam errors (PolicyError) deliberately PROPAGATE from here:
     # the slash safe-handler renders the one-line notice; the CLI dispatcher
     # maps them to §18 exit 2. Same wording both lanes (D-SURF).
+    # PackPinError subclasses PolicyError, so malformed packs.toml and
+    # loader-rejected community packs ride the SAME exit-2 lane (SPEC §15
+    # fail-closed trust table; never a silent skip).
     baseline_records, key_suffix = _baseline_state(view, target_path)
+    from .packpins import resolve_external_packs
+
+    external = resolve_external_packs(project_dir=target_path)
+    key_suffix = key_suffix + external.cache_suffix
+
+    def _out(text: str) -> str:
+        """Prepend the loud per-pack notices (rejected/warned/inert)."""
+        if not external.notices:
+            return text
+        return "\n".join([*external.notices, text])
 
     # Fast path first: ingest + hash is cheap and runs inline (<200 ms
     # contract, PLAN Phase 1); a live cache entry answers WITHOUT engines.
@@ -379,23 +452,37 @@ def _verb_scan(
         sink=sink,
     )
     if hit_text is not None:
-        return hit_text
+        if sarif_out is not None:
+            hit_text = _write_scan_sarif_out(
+                (sink or {}).get("envelope"), sarif_out, hit_text, display_name
+            )
+            if hit_text.startswith("lens fail"):
+                return hit_text
+        return _out(hit_text)
     if ir is None:  # load_bundle contract says never; keep a sober D-line anyway
         return fast_line_fail(name=display_name, reason=f"unreadable target: {positional[0]}")
 
-    # --fail-on arm (§8.4): a threshold verdict must exist BEFORE the process
-    # exits, so this arm runs the pipeline INLINE instead of enqueueing.
-    # Rationale: §11.5's queue-first rule protects an ongoing reply path; a
-    # one-shot CI invocation has none — the process ends at the exit code —
-    # so nothing can wedge. Without --fail-on the queue-first contract below
-    # is untouched (advisor stance always exits 0).
-    if fail_on is not None:
-        envelope = _fresh_envelope(view=view, cache=cache, target_path=target_path)
+    # Inline arm (§8.4): a threshold verdict — or a written --sarif-out
+    # artifact, or a standalone one-shot console run (view.inline_scans) —
+    # must exist BEFORE the process answers, so this arm runs the pipeline
+    # INLINE instead of enqueueing. Rationale: §11.5's queue-first rule
+    # protects an ongoing reply path; a one-shot CI invocation has none —
+    # the process ends at the exit code — so nothing can wedge. Without any
+    # of these the queue-first contract below is untouched (advisor stance
+    # always exits 0; the persistent JobManager stays plugin-process-only).
+    inline = fail_on is not None or sarif_out is not None or view.inline_scans
+    if inline:
+        envelope = _fresh_envelope(
+            view=view, cache=cache, target_path=target_path, external=external
+        )
         if envelope is None:
-            return fast_line_fail(name=display_name, reason="inline scan failed — see logs")
+            return _out(fast_line_fail(name=display_name, reason="inline scan failed — see logs"))
         if sink is not None:
             sink["envelope"] = envelope
-        return render_chat_compact(envelope, plugin_data_dir=view.plugin_data_dir())
+        text = render_chat_compact(envelope, plugin_data_dir=view.plugin_data_dir())
+        if sarif_out is not None:
+            text = _write_scan_sarif_out(envelope, sarif_out, text, display_name)
+        return _out(text)
 
     # Cold path (SPEC §11.5): enqueue on the worker, answer with the fixed
     # format-B one-liner. The reply path never waits on engines.
@@ -414,6 +501,7 @@ def _verb_scan(
             plugin_data_dir=plugin_data_dir,
             cache=cache,
             osv=osv,
+            external_packs=external.packs,
         ),
     )
     if decision.coalesced:
@@ -482,19 +570,22 @@ def _verb_report(
     jobs: Any = None,
     sink: dict[str, Any] | None = None,
 ) -> str:
-    # --fail-on/--plain parse here so CLI and slash share one grammar; on the
-    # slash lane --fail-on is inert (D-SURF: verdict travels in text) and
-    # --plain is a no-op (chat renders are already ANSI/box-free).
+    # --fail-on/--plain/--sarif-out parse here so CLI and slash share one
+    # grammar; on the slash lane --fail-on is inert (D-SURF: verdict travels
+    # in text) and --plain is a no-op (chat renders are already ANSI/box-free).
     rest, fail_on, fail_errors = _split_flag(args, "--fail-on")
     if fail_errors:
         return f"lens fail report · {fail_errors[0]}"
+    rest, sarif_out, sarif_errors = _split_flag(rest, "--sarif-out")
+    if sarif_errors:
+        return f"lens fail report · {sarif_errors[0]}"
     if fail_on is not None and fail_on.strip().lower() not in FAIL_ON_LEVELS:
         return (
             f"lens fail report · unknown --fail-on level {fail_on!r} "
             f"(expected one of: {', '.join(FAIL_ON_LEVELS)})"
         )
     positional = [a for a in rest if not a.startswith("--")]
-    known = ("--sarif", "--json", "--fail-on", "--plain")
+    known = ("--sarif", "--json", "--fail-on", "--sarif-out", "--plain")
     unknown_flags = [a for a in rest if a.startswith("--") and a not in known]
     if unknown_flags:
         return _usage_line(offender=unknown_flags[0])
@@ -522,24 +613,56 @@ def _verb_report(
     if want_sarif and entry.envelope_json:
         import json as _json
 
-        from .report import render_sarif
+        from .report import render_sarif, write_sarif_file
 
         try:
             envelope = _json.loads(entry.envelope_json)
         except ValueError:
             return f"lens fail report · cached envelope unparsable for {entry.name!r}"
-        return f"```json\n{canonical_dumps(render_sarif(envelope))}\n```"
+        text = f"```json\n{canonical_dumps(render_sarif(envelope))}\n```"
+        if sarif_out is not None:
+            try:
+                write_sarif_file(envelope, sarif_out)
+            except OSError as exc:
+                reason = getattr(exc, "strerror", None)
+                if not reason:
+                    reason = exc.__class__.__name__
+                return f"lens fail report · cannot write --sarif-out {sarif_out!r}: {reason}"
+            text = f"{text}\nlens sarif-out · wrote {sarif_out}"
+        return text
+    if sarif_out is not None:
+        import json as _json
+
+        from .report import write_sarif_file
+
+        try:
+            envelope = _json.loads(entry.envelope_json or "")
+        except ValueError:
+            return f"lens fail report · cached envelope unparsable for {entry.name!r}"
+        try:
+            write_sarif_file(envelope, sarif_out)
+        except OSError as exc:
+            reason = getattr(exc, "strerror", None)
+            if not reason:
+                reason = exc.__class__.__name__
+            return f"lens fail report · cannot write --sarif-out {sarif_out!r}: {reason}"
+        sarif_note = f"\nlens sarif-out · wrote {sarif_out}"
+    else:
+        sarif_note = ""
     if want_json and entry.envelope_json:
         return f"```json\n{entry.envelope_json}\n```"
     if entry.compact_text:
-        return entry.compact_text
-    return fast_line_ok(
-        name=entry.name,
-        grade=entry.grade,
-        value=entry.value,
-        verdict=entry.verdict,
-        counts=entry.counts,
-        cached_seconds=entry.age_seconds(),
+        return entry.compact_text + sarif_note
+    return (
+        fast_line_ok(
+            name=entry.name,
+            grade=entry.grade,
+            value=entry.value,
+            verdict=entry.verdict,
+            counts=entry.counts,
+            cached_seconds=entry.age_seconds(),
+        )
+        + sarif_note
     )
 
 
@@ -811,20 +934,34 @@ def _load_report_envelope(
 
 
 def _fresh_envelope(
-    *, view: PluginContextView, cache: FastPathCache, target_path: Path
+    *,
+    view: PluginContextView,
+    cache: FastPathCache,
+    target_path: Path,
+    external: Any = None,
 ) -> dict[str, Any] | None:
-    """Run one suppressed-current pipeline pass; envelope dict or None."""
+    """Run one suppressed-current pipeline pass; envelope dict or None.
+
+    *external* accepts a pre-resolved :class:`~skill_lens.packpins.ExternalPackState`
+    so callers that already resolved the pin table (the scan verb) never
+    verify twice; None resolves fresh (diff/baseline arms).
+    """
     import json as _json
 
     try:
         baseline_records, key_suffix = _baseline_state(view, target_path)
+        if external is None:
+            from .packpins import resolve_external_packs
+
+            external = resolve_external_packs(project_dir=target_path)
         outcome = run_scan(
             target_path,
             cache=cache,
             plugin_data_dir=view.plugin_data_dir(),
             baseline_records=baseline_records,
-            key_suffix=key_suffix,
+            key_suffix=key_suffix + external.cache_suffix,
             report_date=_today(),
+            external_packs=external.packs,
         )
     except PolicyError:
         # Config seam ⇒ surface lane decides (notice vs exit 2).
@@ -920,7 +1057,10 @@ def _chat_soft_budget(view: PluginContextView | None) -> int | None:
     from .fun import _setting
 
     raw = _setting(view, "chat_budget_chars")
-    return int(raw) if isinstance(raw, int) and raw > 0 else None
+    try:
+        return int(raw) if isinstance(raw, int) and raw > 0 else None
+    except (TypeError, ValueError):  # defensive: never let a junk setting crash the verb
+        return None
 
 
 def _verb_map(
@@ -954,9 +1094,7 @@ def _verb_map(
         # decided against $HERMES_HOME/skills, D-PROV-safe): scores, hashes,
         # and findings are byte-identical with or without it. Map is the one
         # surface whose §11.2 contract names the categorized layout.
-        result = scan_bundle(
-            target_path, deadline=_deadline_from_start(start), home=hermes_home()
-        )
+        result = scan_bundle(target_path, deadline=_deadline_from_start(start), home=hermes_home())
         baseline_records, _suffix = _baseline_state(view, target_path)
         envelope = build_report(result, baseline_entries=baseline_records, report_date=_today())
     except ScanDeadlineBreach:
@@ -1225,6 +1363,53 @@ def _verb_hub(
     )
 
 
+def _rules_list(args: list[str], *, sink: dict[str, Any] | None = None) -> str:
+    """``rules list [dir]`` — core + every pin-table pack (SPEC §15 surface).
+
+    Sorted, deterministic, no wall-clock: one line per pack with version,
+    rule count, content checksum, and pin-match outcome. Rejected packs
+    keep their loud line (never silently dropped from the listing). There
+    is deliberately NO command to ADD pins — authoring ``.lens/packs.toml``
+    is the user's job (zero magic; manual-only D-RULEOWN).
+    """
+    args = [a for a in args if a != "--plain"]
+    unknown = [a for a in args if a.startswith("--")]
+    if unknown:
+        return fast_line_fail(name="rules list", reason=f"unknown flag {unknown[0]}")
+    if len(args) > 1:
+        return fast_line_fail(name="rules list", reason="usage: rules list [dir]")
+
+    def _set_exit(code: int) -> None:
+        if sink is not None:
+            sink["rules_exit"] = code
+
+    from .packpins import MAX_EXTERNAL_PACKS, PackPinError, resolve_external_packs
+    from .rules import load_core_pack
+
+    project_dir = Path(args[0]) if args else Path.cwd()
+    try:
+        state = resolve_external_packs(project_dir=project_dir)
+    except PackPinError as exc:
+        _set_exit(2)
+        return fast_line_fail(name="rules list", reason=str(exc))
+    core = load_core_pack()
+    lines = [
+        f"lens rules list · core + {len(state.packs)} pinned pack(s) "
+        f"(ceiling {MAX_EXTERNAL_PACKS})",
+        f"core {core.version} · {len(core.rules)} rules ({len(core.active_rules())} active) "
+        f"· {core.content_checksum()} · embedded",
+    ]
+    for pack in sorted(state.packs, key=lambda item: item.name):
+        lines.append(
+            f"{pack.name} {pack.version} · {len(pack.rules)} rules "
+            f"({len(pack.active_rules())} active) · {pack.content_checksum()} · pin-match ok"
+        )
+    lines.extend(state.notices)
+    if any(status == "fail" for _n, status, _k in state.verdicts):
+        _set_exit(2)
+    return "\n".join(lines)
+
+
 def _verb_rules(
     args: list[str], *, view: PluginContextView, sink: dict[str, Any] | None = None
 ) -> str:
@@ -1249,11 +1434,14 @@ def _verb_rules(
     action = args[0].lower() if args else "verify"
     if action in ("-h", "--help", "help"):
         return _RULES_USAGE
+    if action == "list":
+        return _rules_list(args[1:], sink=sink)
     if action != "verify":
-        return fast_line_fail(
-            name="rules",
-            reason=f"unknown action {action!r} — usage: rules verify [path] (--sig F) (--pubkey F)",
+        reason = (
+            f"unknown action {action!r} — usage: rules list [dir] | rules verify [path] "
+            "(--sig F) (--pubkey F)"
         )
+        return fast_line_fail(name="rules", reason=reason)
     rest = args[1:]
     sig_path: str | None = None
     pub_path: str | None = None
@@ -1293,11 +1481,25 @@ def _verb_rules(
             if report.status == "pass"
             else "lens rules verify · core"
         )
-        body = "\n".join(report.lines)
-        if report.status == "pass":
-            return f"{head}\n{body}"
         prefix = "lens fail · rule-pack signature REJECTED" if report.status == "fail" else head
-        return f"{prefix}\n{body}"
+        lines = [prefix, "\n".join(report.lines)]
+        # Pin-table packs (SPEC §15): one line per pack — pass/rejected +
+        # reason — from the SAME shared verifier the scan path and doctor
+        # use, so the three surfaces cannot drift (D-055 precedent).
+        from .packpins import PackPinError, resolve_external_packs
+
+        try:
+            state = resolve_external_packs()
+        except PackPinError as exc:
+            _set_exit(2)
+            return fast_line_fail(name="rules", reason=str(exc))
+        lines.extend(state.notices)
+        if any(status == "fail" for _n, status, _k in state.verdicts):
+            _set_exit(2)
+            lines.append(
+                "lens fail · rule-pack verification REJECTED (treat the pack bytes as untrusted)"
+            )
+        return "\n".join(lines)
 
     target = Path(positional[0])
     try:

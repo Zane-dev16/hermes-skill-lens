@@ -190,7 +190,10 @@ class DoctorReport:
 
 
 def check_rule_pack(
-    root: Path | None = None, *, pack: Any = None
+    root: Path | None = None,
+    *,
+    pack: Any = None,
+    project_dir: Path | None = None,
 ) -> tuple[CheckResult, str, str]:
     """Check 1 — rule-pack version + checksum + SIGNATURE integrity.
 
@@ -200,6 +203,13 @@ def check_rule_pack(
     — the two surfaces share one implementation so ``rules verify`` and
     this check cannot drift. *root* / *pack* inject an alternate plugin
     tree for tamper tests; production callers use the real one.
+
+    §15 extension: the check then iterates the COMMUNITY pack pin table
+    (``.lens/packs.toml``) through the SAME shared verifier the scan path
+    and ``rules verify`` use — pin mismatch / unreadable pack / id
+    collision / present-but-invalid signature = hard FAIL (exit 2, §11.9
+    total-error semantics); missing pin / absent crypto backend = honest
+    warn lines; ``enabled = false`` = inert info line.
     """
     title = "rule-pack integrity"
     try:
@@ -222,27 +232,50 @@ def check_rule_pack(
             "",
             "",
         )
-    if report.status == "pass":
-        return (
-            CheckResult(1, "rule-pack", title, PASS, report.lines),
-            pack.version,
-            report.checksum,
-        )
-    if report.status == "fail":
+    status = {PASS: PASS, WARN: WARN, FAIL: FAIL}[report.status]
+    hard = report.status == "fail"
+    detail = list(report.lines)
+
+    from .packpins import PackPinError, resolve_external_packs
+
+    try:
+        state = resolve_external_packs(project_dir=project_dir)
+    except PackPinError as exc:
         return (
             CheckResult(
                 1,
                 "rule-pack",
                 title,
                 FAIL,
-                report.lines,
+                (*detail, f"malformed packs.toml: {exc}"),
                 hard=True,
             ),
             pack.version,
             report.checksum,
         )
+    except Exception as exc:  # noqa: BLE001 — containment law
+        return (
+            CheckResult(
+                1,
+                "rule-pack",
+                title,
+                FAIL,
+                (*detail, f"pack-pin resolution crashed: {exc!r}"),
+                hard=True,
+            ),
+            pack.version,
+            report.checksum,
+        )
+    detail.extend(str(line).replace("lens packs · ", "", 1) for line in state.notices)
+    for line in state.warnings:
+        detail.append(line)
+    if any(verb_status == "fail" for _n, verb_status, _k in state.verdicts):
+        status, hard = FAIL, True
+    elif any(verb_status == "warn" for _n, verb_status, _k in state.verdicts):
+        if status == PASS:
+            status = WARN
     return (
-        CheckResult(1, "rule-pack", title, WARN, report.lines),
+        CheckResult(1, "rule-pack", title, status, tuple(detail), hard=hard),
         pack.version,
         report.checksum,
     )

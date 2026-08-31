@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from .baseline import apply_baselines
@@ -259,6 +260,41 @@ def render_sarif(envelope: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def write_sarif_file(envelope: Mapping[str, Any], path: str | Path) -> Path:
+    """Write canonical SARIF for *envelope* to *path* (atomic replace).
+
+    The bytes are exactly :func:`canonical_dumps` over
+    :func:`render_sarif` — the same text the ``--sarif`` fence wraps, so
+    machine consumers (the GitHub Action's ``upload-sarif`` step) read
+    byte-identical output across surfaces. Writes land via a temp file in
+    the target directory + :func:`os.replace`, so a crashed scan can never
+    leave a truncated artifact behind.
+    """
+    import os
+    import tempfile
+
+    from .canonical import canonical_dumps
+
+    target = Path(path).expanduser()
+    text = canonical_dumps(render_sarif(envelope))
+    parent = target.parent if str(target.parent) else Path(".")
+    # No parent auto-creation: an unwritable/missing target directory must
+    # FAIL the request loudly (the artifact is the point of the flag), not
+    # silently fabricate directories.
+    fd, tmp_name = tempfile.mkstemp(dir=parent, prefix=".lens-sarif-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return target
+
+
 def report_hash8(envelope: Mapping[str, Any]) -> str:
     """Stable 8-hex display shard of the target bundle hash ("9f2ca41e").
 
@@ -281,4 +317,5 @@ __all__ = [
     "build_report",
     "render_sarif",
     "report_hash8",
+    "write_sarif_file",
 ]
