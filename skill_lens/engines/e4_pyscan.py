@@ -393,6 +393,7 @@ class _AstFile:
     assignments: dict[str, list[Any]] = field(default_factory=dict)  # name -> value nodes
     param_names: frozenset[str] = frozenset()
     calls: list[Any] = field(default_factory=list)
+    imports: set[str] = field(default_factory=set)
 
 
 def _node_text(node: Any, source: bytes) -> str:
@@ -423,18 +424,22 @@ def _walk_calls(node: Any, out: list[Any], collected: _AstFile, source: bytes) -
     elif ntype == "import_statement":
         for child in node.named_children:
             if child.type == "dotted_name":
-                root = _node_text(child, source).partition(".")[0]
+                mod = _node_text(child, source)
+                collected.imports.add(mod)
+                root = mod.partition(".")[0]
                 collected.aliases.setdefault(root, root)
             elif child.type == "aliased_import":
                 name_node = child.child_by_field_name("name")
                 alias_node = child.child_by_field_name("alias")
                 if name_node is not None and alias_node is not None:
-                    collected.aliases[_node_text(alias_node, source)] = _node_text(
-                        name_node, source
-                    )
+                    mod = _node_text(name_node, source)
+                    collected.imports.add(mod)
+                    collected.aliases[_node_text(alias_node, source)] = mod
     elif ntype == "import_from_statement":
         module_node = node.child_by_field_name("module_name")
         module = _node_text(module_node, source) if module_node is not None else ""
+        if module:
+            collected.imports.add(module)
         for child in node.named_children:
             # Identity comparison is WRONG here: tree-sitter hands out fresh
             # wrapper objects per access — compare underlying byte spans.
@@ -446,12 +451,15 @@ def _walk_calls(node: Any, out: list[Any], collected: _AstFile, source: bytes) -
                 local = _node_text(child, source)
                 if module and local != "*":
                     collected.aliases.setdefault(local, f"{module}.{local}")
+                    collected.imports.add(f"{module}.{local}")
             elif child.type == "aliased_import":
                 name_node = child.child_by_field_name("name")
                 alias_node = child.child_by_field_name("alias")
                 if name_node is not None and alias_node is not None:
-                    local = _node_text(alias_node, source)
-                    collected.aliases[local] = f"{module}.{_node_text(name_node, source)}"
+                    local = _node_text(name_node, source)
+                    collected.aliases[_node_text(alias_node, source)] = f"{module}.{local}"
+                    if module and local != "*":
+                        collected.imports.add(f"{module}.{local}")
     elif ntype == "assignment":
         left = node.child_by_field_name("left")
         right = node.child_by_field_name("right")
@@ -901,16 +909,24 @@ def _scan_file_ast(
     text: str,
     tree: Any,
     rules: dict[str, Rule],
+    collected: _AstFile | None = None,
+    calls: list[Any] | None = None,
+    resolver: _Resolver | None = None,
+    flow: _Flow | None = None,
 ) -> list[Finding]:
     """AST-mode collectors for one parsed file (caller guards exceptions)."""
     source = text.encode("utf-8")
     lines = text.splitlines()
-    collected = _AstFile()
-    calls: list[Any] = []
-    _walk_calls(tree.root_node, calls, collected, source)
-    resolver = _Resolver(collected, source)
-    flow = _Flow(collected, resolver, source)
-    flow.compute()
+    if collected is None or calls is None or resolver is None or flow is None:
+        collected = _AstFile() if collected is None else collected
+        calls = [] if calls is None else calls
+        if not calls:
+            _walk_calls(tree.root_node, calls, collected, source)
+        resolver = _Resolver(collected, source) if resolver is None else resolver
+        flow = _Flow(collected, resolver, source) if flow is None else flow
+        flow.compute()
+    else:
+        pass
 
     findings: list[Finding] = []
 
@@ -1404,9 +1420,237 @@ def _scan_file_lines(
 
 
 # ---------------------------------------------------------------------------
-# Engine
+# Cross-file taint (v1.0) — same-bundle, same-language, import-edge only
 # ---------------------------------------------------------------------------
 
+def _py_module_name(rel_path: str) -> str | None:
+    """Bundle-relative module name for a ``.py`` file (``/``→``.``, strip ``.py``)."""
+    if not rel_path.endswith(".py"):
+        return None
+    without = rel_path[:-3]
+    if without.endswith("/__init__"):
+        without = without[:-9]
+        if not without:
+            return ""
+    elif without == "__init__":
+        return ""
+    return without.replace("/", ".")
+
+def _py_package_for_path(rel_path: str) -> str:
+    """Package (dotted) containing *rel_path*; ``scripts/a.py`` => ``scripts``."""
+    dir_part = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
+    return dir_part.replace("/", ".")
+
+def _py_resolve_import(
+    sink_path: str, import_mod: str, module_to_path: dict[str, str]
+) -> str | None:
+    """Resolve one raw import string from *sink_path* to a bundle path, or None."""
+    if not import_mod:
+        return None
+    if import_mod.startswith("."):
+        level = len(import_mod) - len(import_mod.lstrip("."))
+        remainder = import_mod.lstrip(".")
+        sink_pkg = _py_package_for_path(sink_path)
+        pkg_parts = sink_pkg.split(".") if sink_pkg else []
+        if level == 1:
+            base = sink_pkg
+            if base and remainder:
+                absolute = f"{base}.{remainder}"
+            else:
+                absolute = remainder or base
+        else:
+            up = level - 1
+            if up > len(pkg_parts):
+                return None
+            if up == len(pkg_parts):
+                base = ""
+            else:
+                base = ".".join(pkg_parts[: len(pkg_parts) - up]) if pkg_parts else ""
+            if base and remainder:
+                absolute = f"{base}.{remainder}"
+            else:
+                absolute = remainder or base
+        return module_to_path.get(absolute)
+    return module_to_path.get(import_mod)
+
+@dataclass
+class _PyCrossInfo:
+    path: str
+    imports: set[str]
+    source_kinds: set[str]
+    source_sites: dict[str, tuple[int, int, str]]
+    sink_shorts: set[str]
+    sink_sites: dict[str, tuple[int, int, str]]
+    escalated: bool
+
+def _py_collect_source_info(
+    collected: _AstFile,
+    resolver: _Resolver,
+    source_bytes: bytes,
+    text: str,
+    lines: list[str],
+    calls: list[Any],
+) -> tuple[set[str], dict[str, tuple[int, int, str]]]:
+    kinds: set[str] = set()
+    sites: dict[str, tuple[int, int, str]] = {}
+    for call in calls:
+        resolved = (resolver.callee(call) or "").lower()
+        tail = _tail(resolved)
+        if resolved in _ENV_READ_CALLS:
+            if "env" not in sites:
+                start_line = call.start_point[0] + 1
+                end_line = call.end_point[0] + 1
+                snippet = lines[start_line - 1].strip() if 0 <= start_line - 1 < len(lines) else ""
+                sites["env"] = (start_line, end_line, snippet)
+            kinds.add("env")
+        if (resolved == "open" or tail in _FILE_READ_TAILS) and not _open_mode_writes(
+            call, source_bytes
+        ):
+            if "file-read" not in sites:
+                start_line = call.start_point[0] + 1
+                end_line = call.end_point[0] + 1
+                snippet = lines[start_line - 1].strip() if 0 <= start_line - 1 < len(lines) else ""
+                sites["file-read"] = (start_line, end_line, snippet)
+            kinds.add("file-read")
+    if "os.environ" in text:
+        if "env" not in sites:
+            for idx, line in enumerate(lines, start=1):
+                if "os.environ" in line:
+                    sites["env"] = (idx, idx, line.strip())
+                    break
+        kinds.add("env")
+    if "expanduser" in text:
+        if "env" not in sites:
+            for idx, line in enumerate(lines, start=1):
+                if "expanduser" in line:
+                    sites["env"] = (idx, idx, line.strip())
+                    break
+        kinds.add("env")
+    if "getenv" in text and "env" not in kinds:
+        kinds.add("env")
+        if "env" not in sites:
+            for idx, line in enumerate(lines, start=1):
+                if "getenv" in line:
+                    sites["env"] = (idx, idx, line.strip())
+                    break
+    return kinds, sites
+
+def _py_collect_sink_info(
+    calls: list[Any],
+    resolver: _Resolver,
+    source_bytes: bytes,
+    lines: list[str],
+) -> tuple[set[str], dict[str, tuple[int, int, str]]]:
+    shorts: set[str] = set()
+    sites: dict[str, tuple[int, int, str]] = {}
+    for call in calls:
+        short = _net_send_match(resolver, call, source_bytes)
+        if short is not None:
+            if short not in sites:
+                start_line = call.start_point[0] + 1
+                end_line = call.end_point[0] + 1
+                snippet = lines[start_line - 1].strip() if 0 <= start_line - 1 < len(lines) else ""
+                sites[short] = (start_line, end_line, snippet)
+            shorts.add(short)
+    return shorts, sites
+
+def _py_cross_findings(
+    cross_infos: dict[str, _PyCrossInfo],
+    claimed: list[str],
+    rules: dict[str, Rule],
+) -> list[Finding]:
+    if not cross_infos:
+        return []
+    module_to_path: dict[str, str] = {}
+    for p in sorted(cross_infos.keys()):
+        mod = _py_module_name(p)
+        if mod is not None:
+            if mod not in module_to_path:
+                module_to_path[mod] = p
+    findings: list[Finding] = []
+    for sink_path in sorted(cross_infos.keys()):
+        sink_info = cross_infos[sink_path]
+        if not sink_info.sink_shorts:
+            continue
+        resolved_sources: set[str] = set()
+        for imp in sorted(sink_info.imports):
+            src = _py_resolve_import(sink_path, imp, module_to_path)
+            if src is not None and src != sink_path and src in cross_infos:
+                resolved_sources.add(src)
+        if not resolved_sources:
+            continue
+        for src_path in sorted(resolved_sources):
+            src_info = cross_infos[src_path]
+            if not src_info.source_kinds:
+                continue
+            for src_kind in sorted(src_info.source_kinds):
+                for sink_short in sorted(sink_info.sink_shorts):
+                    evidence = f"xf-flow:{src_kind}:{sink_short}:{src_path}>{sink_path}"
+                    sink_site = sink_info.sink_sites[sink_short]
+                    src_site = src_info.source_sites[src_kind]
+                    builder = _FindingBuilder(
+                        rules, sink_path, claimed, escalated=sink_info.escalated
+                    )
+                    human = "environment variables" if src_kind == "env" else "file contents"
+                    msg = (
+                        f"Locally collected sensitive input ({human}) flows through "
+                        f"an imported module ({src_path}) into a network-send sink "
+                        f"({sink_short}) — the credential-harvest exfil shape "
+                        f"(cross-file import edge)."
+                    )
+                    finding = builder.build(
+                        "LNS-PYS-004",
+                        sink_site[0],
+                        sink_site[1],
+                        sink_site[2],
+                        evidence,
+                        msg,
+                        confidence=0.80,
+                        extra_tags=("cross-file-flow",),
+                    )
+                    if finding is not None:
+                        src_loc = Location(
+                            path=src_path,
+                            start_line=src_site[0],
+                            end_line=src_site[1],
+                            snippet=src_site[2][:160],
+                            redacted=False,
+                        )
+                        sink_loc = finding.location
+                        finding = Finding(
+                            fingerprint=finding.fingerprint,
+                            rule_id=finding.rule_id,
+                            rule_version=finding.rule_version,
+                            engine=finding.engine,
+                            title=finding.title,
+                            capability=finding.capability,
+                            severity=finding.severity,
+                            effective_severity=finding.effective_severity,
+                            confidence=finding.confidence,
+                            evidence_kind=finding.evidence_kind,
+                            static_only=False,
+                            declared=finding.declared,
+                            overreach=finding.overreach,
+                            location=sink_loc,
+                            claim_ref=finding.claim_ref,
+                            message=finding.message,
+                            remediation=finding.remediation,
+                            tags=finding.tags,
+                            suppressed=finding.suppressed,
+                            suppressed_by=finding.suppressed_by,
+                            llm_touched=finding.llm_touched,
+                            id=finding.id,
+                            locations=(sink_loc, src_loc),
+                            additional_location_count=0,
+                            detail=finding.detail,
+                        )
+                        findings.append(finding)
+    findings.sort(key=_finding_sort_key)
+    return findings
+
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
 
 class PyScanEngine:
     """E4 implementation — AST sinks with golden-tested line-scanner fallback."""
@@ -1422,10 +1666,112 @@ class PyScanEngine:
         del ctx  # content arrives through the ambient seam via iter_text_files
         claimed = claimed_capability_paths(bundle_ir)
         findings: list[Finding] = []
-        for record, text in iter_text_files(bundle_ir, _current_ctx()):
-            if not record.path.endswith(".py"):
-                continue
-            findings.extend(self._scan_file(record.path, text, claimed))
+        cross_infos: dict[str, _PyCrossInfo] = {}
+        if type(self) is PyScanEngine:
+            for record, text in iter_text_files(bundle_ir, _current_ctx()):
+                if not record.path.endswith(".py"):
+                    continue
+                try:
+                    outcome = self._gateway.parse("python", text)
+                except Exception:  # noqa: BLE001
+                    outcome = None
+                if outcome is not None and outcome.mode == "ast" and outcome.tree is not None:
+                    try:
+                        source_bytes = text.encode("utf-8")
+                        lines = text.splitlines()
+                        collected = _AstFile()
+                        calls: list[Any] = []
+                        _walk_calls(outcome.tree.root_node, calls, collected, source_bytes)
+                        resolver = _Resolver(collected, source_bytes)
+                        flow = _Flow(collected, resolver, source_bytes)
+                        flow.compute()
+                        builder = _FindingBuilder(
+                            self._rules,
+                            record.path,
+                            claimed,
+                            escalated=bool(_PLATFORM_DISABLED_RE.search(text)),
+                        )
+                        findings.extend(
+                            _scan_file_ast(
+                                builder,
+                                text,
+                                outcome.tree,
+                                self._rules,
+                                collected=collected,
+                                calls=calls,
+                                resolver=resolver,
+                                flow=flow,
+                            )
+                        )
+                        src_kinds, src_sites = _py_collect_source_info(
+                            collected, resolver, source_bytes, text, lines, calls
+                        )
+                        sink_shorts, sink_sites = _py_collect_sink_info(
+                            calls, resolver, source_bytes, lines
+                        )
+                        cross_infos[record.path] = _PyCrossInfo(
+                            path=record.path,
+                            imports=set(collected.imports),
+                            source_kinds=src_kinds,
+                            source_sites=src_sites,
+                            sink_shorts=sink_shorts,
+                            sink_sites=sink_sites,
+                            escalated=bool(_PLATFORM_DISABLED_RE.search(text)),
+                        )
+                        continue
+                    except Exception:
+                        pass
+                builder = _FindingBuilder(
+                    self._rules,
+                    record.path,
+                    claimed,
+                    escalated=bool(_PLATFORM_DISABLED_RE.search(text)),
+                )
+                findings.extend(_scan_file_lines(builder, text, self._rules))
+        else:
+            for record, text in iter_text_files(bundle_ir, _current_ctx()):
+                if not record.path.endswith(".py"):
+                    continue
+                try:
+                    same = self._scan_file(record.path, text, claimed)
+                except Exception:
+                    raise
+                findings.extend(same)
+                try:
+                    outcome = self._gateway.parse("python", text)
+                except Exception:
+                    outcome = None
+                if outcome is not None and outcome.mode == "ast" and outcome.tree is not None:
+                    try:
+                        source_bytes = text.encode("utf-8")
+                        lines = text.splitlines()
+                        collected = _AstFile()
+                        calls: list[Any] = []
+                        _walk_calls(outcome.tree.root_node, calls, collected, source_bytes)
+                        resolver = _Resolver(collected, source_bytes)
+                        flow = _Flow(collected, resolver, source_bytes)
+                        flow.compute()
+                        src_kinds, src_sites = _py_collect_source_info(
+                            collected, resolver, source_bytes, text, lines, calls
+                        )
+                        sink_shorts, sink_sites = _py_collect_sink_info(
+                            calls, resolver, source_bytes, lines
+                        )
+                        cross_infos[record.path] = _PyCrossInfo(
+                            path=record.path,
+                            imports=set(collected.imports),
+                            source_kinds=src_kinds,
+                            source_sites=src_sites,
+                            sink_shorts=sink_shorts,
+                            sink_sites=sink_sites,
+                            escalated=bool(_PLATFORM_DISABLED_RE.search(text)),
+                        )
+                    except Exception:
+                        pass
+        try:
+            findings.extend(_py_cross_findings(cross_infos, claimed, self._rules))
+        except Exception:
+            pass
         findings.sort(key=_finding_sort_key)
         return findings
 

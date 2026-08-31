@@ -271,6 +271,11 @@ def dedup_finding_dicts(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         members = groups[key]
         survivor = dict(members[0])
         if len(members) == 1:
+            existing = survivor.get("locations")
+            if isinstance(existing, list) and len(existing) > 1:
+                survivor["additional_location_count"] = 0
+                merged.append(survivor)
+                continue
             survivor["locations"] = [dict(survivor["location"])]
             survivor["additional_location_count"] = 0
             merged.append(survivor)

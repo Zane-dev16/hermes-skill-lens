@@ -5,7 +5,27 @@
      semantics are SPEC §15: new rule = patch; weight/severity change =
      minor + rationale; deprecation ships >=2 minors before removal. -->
 
-Current version: **2026.08.8** · 44 rules
+Current version: **2026.08.9** · 44 rules
+
+## 2026.08.9 — 2026-08-28
+
+- Cross-file taint v1.0 per cross-file-taint.md §13: E4 sources→E4 sinks, E5→E5 only;
+- direct import edge is the bar (E4: import/from-import resolving to .py path; E5:
+- require/import resolving to sibling .js path); plain co-presence and
+- cross-language co-presence never fire (D-024 FP filter; consumer-intent
+- stays with the LLM layer).
+- Detection-widening of LNS-PYS-004/JSS-004 (D-063 precedent): xf-flow token
+- never collapses against same-file sensitive-flow; line-shift stable per
+- file; findings sorted by (rule_id, path, start_line) with sink as
+- primary location and source attached to locations[].
+- Fixtures: malicious py-split-exfil (helpers/grab.py→scripts/run_report.py)
+- and js-split-beacon (lib/envcollect.js→index.js) fire HIGH via xf-flow;
+- benign split-modules-reporter (co-presence no edge), declared-split-uploader
+- (import edge no source), cross-lang-co-presence (py env + js fetch) stay
+- silent (grade ≥ B, FP=0).
+
+Rationale:
+  - Widen LNS-PYS-004 and LNS-JSS-004 to cross-file import-edge taint (same-bundle, same-language, direct import edge — sink imports source); new evidence token family xf-flow:<source_kind>:<sink_short>:<src_path>><sink_path> with confidence 0.80, tag cross-file-flow, static_only false, AST-only (degraded lane unchanged per D-039 parity). No new rule ids, no material (severity/weight/capability/engine/evidence_kind/confidence_default) changes; vectors byte-exact, existing fixtures byte-identical.
 
 ## 2026.08.8 — 2026-08-28
 

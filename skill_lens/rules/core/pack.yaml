@@ -5,7 +5,7 @@
 # YYYY.MM.N: new rule = patch bump, weight/severity change = minor bump +
 # changelog rationale, IR/schema break = major bump.
 name: core
-version: "2026.08.8"
+version: "2026.08.9"
 spec_version: rule-pack/1
 description: >-
   Core detection pack v0.1 for Hermes Skill Lens: forty-four rules across the
@@ -17,6 +17,31 @@ description: >-
   corpus/fixtures/.
 rules_dir: rules
 changelog:
+  - version: "2026.08.9"
+    date: "2026-08-28"
+    rationale: >-
+      Widen LNS-PYS-004 and LNS-JSS-004 to cross-file import-edge taint
+      (same-bundle, same-language, direct import edge — sink imports source);
+      new evidence token family xf-flow:<source_kind>:<sink_short>:<src_path>><sink_path>
+      with confidence 0.80, tag cross-file-flow, static_only false, AST-only
+      (degraded lane unchanged per D-039 parity). No new rule ids, no material
+      (severity/weight/capability/engine/evidence_kind/confidence_default)
+      changes; vectors byte-exact, existing fixtures byte-identical.
+    notes:
+      - "Cross-file taint v1.0 per cross-file-taint.md §13: E4 sources→E4 sinks, E5→E5 only;"
+      - "direct import edge is the bar (E4: import/from-import resolving to .py path; E5:"
+      - "require/import resolving to sibling .js path); plain co-presence and"
+      - "cross-language co-presence never fire (D-024 FP filter; consumer-intent"
+      - "stays with the LLM layer)."
+      - "Detection-widening of LNS-PYS-004/JSS-004 (D-063 precedent): xf-flow token"
+      - "never collapses against same-file sensitive-flow; line-shift stable per"
+      - "file; findings sorted by (rule_id, path, start_line) with sink as"
+      - "primary location and source attached to locations[]."
+      - "Fixtures: malicious py-split-exfil (helpers/grab.py→scripts/run_report.py)"
+      - "and js-split-beacon (lib/envcollect.js→index.js) fire HIGH via xf-flow;"
+      - "benign split-modules-reporter (co-presence no edge), declared-split-uploader"
+      - "(import edge no source), cross-lang-co-presence (py env + js fetch) stay"
+      - "silent (grade ≥ B, FP=0)."
   - version: "2026.08.8"
     date: "2026-08-28"
     rationale: >-

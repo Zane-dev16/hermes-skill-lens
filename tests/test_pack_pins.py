@@ -282,7 +282,7 @@ def test_rules_list_shows_core_and_packs(tmp_path: pathlib.Path, monkeypatch) ->
     from skill_lens.slash import dispatch_verb
 
     out = dispatch_verb("rules list", view=_view(tmp_path), cache=_cache())
-    assert "core 2026.08.8" in out
+    assert "core 2026.08.9" in out
     assert "acme-rules 2026.01.1" in out
     assert "pin-match ok" in out
     ns = _namespace("rules", action="list")
