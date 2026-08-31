@@ -1,12 +1,13 @@
 # Release publish kit — owner runbook (2026-08-28)
 
 The SSH tag push is the release (owner ruling, D-064). What remains is
-attaching the signed artifacts as GitHub Release assets for both cuts.
+attaching the signed artifacts as GitHub Release assets for all three cuts
+(v0.9.0, v0.9.1, v1.0.0).
 This box has **no GitHub API token**, so these commands are owner-run.
 
 Artifact names are deterministic: `dist/lens-core-pack-<packver>.zip` plus
 `.zip.sig` (see `scripts/release.py`). The 2026.08.8 zip appears only after
-the v0.9.1 cut; it is referenced here by its deterministic name.
+the v0.9.1 cut and the 2026.08.9 zip only after the v1.0.0 cut; both are referenced here by deterministic names.
 
 ## Prerequisite (one-time)
 
@@ -36,6 +37,16 @@ gh release create v0.9.1 \
 
 `release.py cut` emits the v0.9.1 notes skeleton
 (`dist/release-notes-v0.9.1.md` by default — move or point
+`--notes-file` at wherever it lands).
+
+## v1.0.0 — pack 2026.08.9 (after `scripts/release.py cut --plugin-version 1.0.0`)
+
+```sh
+gh release create v1.0.0 dist/lens-core-pack-2026.08.9.zip dist/lens-core-pack-2026.08.9.zip.sig --title "Skill Lens v1.0.0" --notes-file build-state/release-notes-v1.0.0.md
+```
+
+`release.py cut` emits the v1.0.0 notes skeleton
+(`dist/release-notes-v1.0.0.md` by default — move or point
 `--notes-file` at wherever it lands).
 
 ## curl-API alternative (if gh CLI is unavailable)
@@ -73,6 +84,7 @@ Repeat with `TAG=v0.9.0`, pack `2026.08.6`, and
 ```sh
 gh release view v0.9.0 --json assets --jq '.assets[].name'
 gh release view v0.9.1 --json assets --jq '.assets[].name'
+gh release view v1.0.0 --json assets --jq '.assets[].name'
 ```
 
 Each release should list exactly two assets: the pack zip and its `.sig`.

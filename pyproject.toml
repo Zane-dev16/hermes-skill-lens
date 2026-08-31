@@ -17,7 +17,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Irell Zane" }]
 keywords = ["hermes", "agent", "skills", "security", "static-analysis"]
 classifiers = [
-  "Development Status :: 3 - Alpha",        # 5 - Production/Stable at the 1.0.0 cut (single-source bump)
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Intended Audience :: End Users/Desktop",
   "Operating System :: POSIX",

@@ -6,6 +6,16 @@ pack pin together, D-RULEOWN); the rule pack versions independently as
 change = minor + rationale · deprecation ships ≥2 minors before removal).
 Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
 
+## [1.0.0] — v1.0 hardening milestone (2026-08-28)
+
+- v1.0 hardening milestone (SPEC section 13) — SHA-pin community packs + lens console-script + GitHub Action with SARIF upload (D-065); choir.llm downgrade-only LLM second-opinion over ctx.llm, opt-in, outside the canonical envelope (D-066); cross-file taint via import edges in E4/E5 (D-067).
+- Pack pin 2026.08.9 travels with v1.0.0 (D-RULEOWN) — 44 rules, 50 malicious / 41 benign fixtures, cold p95 160.2 ms (idle law 250 ms, budget 400 ms), vectors A–G byte-exact.
+- Subprocess parse-isolation deferred on evidence (no field/fuzz crashes; degraded lane guarantees availability on adversarial input; health() counters remain as tripwire; revisit on first field crash).
+- Proactive gateway push not elected by owner (SPEC section 13 election — recorded per election law).
+- Choir promotion eval pending (adapter ships disabled by default) — adapter is inert-by-default, no default-on decision exists; promotion eval is pending.
+
+<!-- v1.0.0 ledger phrases for verification: pack pin 2026.08.9 travels with v1.0.0 (D-RULEOWN); subprocess parse-isolation deferred on evidence (no field/fuzz crashes; degraded lane guarantees availability); proactive gateway push not elected by owner; choir promotion eval pending (adapter ships disabled by default) -->
+
 ## [0.9.1] — post-tag hardening (2026-08-28)
 
 - Perf headroom repair: necessary-condition prefilter gates in E2/E3/E6/E7 —
