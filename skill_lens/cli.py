@@ -264,6 +264,14 @@ def _tokens_for(verb: str, namespace: Any) -> list[str]:
             tokens.append(str(target))
         if getattr(namespace, "plain", False):
             tokens.append("--plain")
+    elif verb == "second-opinion":
+        name = getattr(namespace, "name", None)
+        if name:
+            tokens.append(str(name))
+        if getattr(namespace, "json", False):
+            tokens.append("--json")
+        if getattr(namespace, "plain", False):
+            tokens.append("--plain")
     elif verb == "lens":
         if getattr(namespace, "plain", False):
             tokens.append("--plain")
@@ -310,10 +318,18 @@ def setup_parser(parser: Any) -> None:
     p_diff.add_argument("--plain", action="store_true")
 
     p_doctor = subparsers.add_parser(
-        "doctor", help="§11.9 nine-check self-check (exit 0 on warnings; 2 on hard failures)"
+        "doctor", help="§11.9 ten-check self-check (exit 0 on warnings; 2 on hard failures)"
     )
     # doctor carries --plain only: it has no verdict envelope to gate.
     p_doctor.add_argument("--plain", action="store_true")
+
+    p_choir = subparsers.add_parser(
+        "second-opinion",
+        help="LLM second opinion on the latest report (opt-in; choir enabled)",
+    )
+    p_choir.add_argument("name", nargs="?", default=None)
+    p_choir.add_argument("--json", action="store_true")
+    p_choir.add_argument("--plain", action="store_true")
 
     p_hub = subparsers.add_parser(
         "hub", help="review bundles staged in skills/.hub/quarantine (advisory lane)"

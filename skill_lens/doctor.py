@@ -1,4 +1,4 @@
-"""``lens doctor`` — the nine-check §11.9 self-check engine.
+"""``lens doctor`` — the ten-check §11.9 self-check engine.
 
 One check engine, two renderers (SPEC §11.9): the CLI lane renders a
 checklist panel with REAL exit codes (0 even on warnings, **2 on any hard
@@ -8,7 +8,7 @@ checks in-process and carries the verdict on its final line, never raising.
 Results land as one ``doctor`` record in ``events.ndjson`` for gateway
 operators (wall-clock ``ts`` rides there only — sidecar exemption).
 
-The nine checks, numbered exactly as SPEC lists them:
+The ten checks, numbered exactly as SPEC lists them:
 
 1. Rule-pack version + checksum + SIGNATURE integrity: since Phase 5 the
    embedded core pack is verified OFFLINE against the committed ed25519
@@ -38,6 +38,9 @@ The nine checks, numbered exactly as SPEC lists them:
    (the D-PROC caveat made observable via skill_lens.parsing.health()).
 9. TTY/color sanity: one-liner rendered twice must be byte-identical, and
    the NO_COLOR/plain lane must strip every box glyph to ASCII.
+10. Choir posture: disabled (default), enabled with adapter present, or
+    enabled but host llm lane absent — making the opt-in downgrade-only
+    second-opinion lane visible without reading source (T4/G1 provenance).
 
 Advisor laws hold here too: every check catches its own exceptions (a broken
 check degrades to a FAIL row naming itself, never an exception into the
@@ -140,7 +143,7 @@ class CheckResult:
 
 @dataclass
 class DoctorReport:
-    """Aggregated nine-check outcome + renderer inputs."""
+    """Aggregated ten-check outcome + renderer inputs."""
 
     checks: list[CheckResult] = field(default_factory=list)
     profile: str = ""
@@ -785,6 +788,64 @@ def check_parse_health() -> CheckResult:
     return CheckResult(8, "parse", title, status, tuple(detail))
 
 
+def check_choir_posture(view: Any) -> CheckResult:
+    """Check 10 — choir posture (opt-in second-opinion lane visibility)."""
+    title = "choir posture"
+    choir_enabled = False
+    try:
+        from .policy import load_policy
+
+        pol = load_policy(ctx=view)
+        choir_enabled = bool(getattr(pol, "choir_enabled", False))
+        if not choir_enabled and view is not None:
+            try:
+                raw = view.get_config("choir.enabled", None)  # type: ignore[attr-defined]
+                if raw is not None:
+                    if isinstance(raw, str):
+                        choir_enabled = raw.strip().lower() not in {"false", "0", "no", "off", ""}
+                    else:
+                        choir_enabled = bool(raw)
+            except Exception:  # noqa: BLE001 — fallback must never crash doctor
+                pass
+    except Exception as exc:  # noqa: BLE001 — policy probe must never crash doctor
+        return CheckResult(10, "choir", title, WARN, (f"policy probe failed: {exc}",))
+    # Adapter presence: does skill_lens.choir resolve?
+    adapter_present = False
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("skill_lens.choir")
+        adapter_present = spec is not None
+    except Exception:  # noqa: BLE001 — import probe must never crash doctor
+        adapter_present = False
+    lane_present = False
+    try:
+        if view is not None and hasattr(view, "llm_lane"):
+            lane = view.llm_lane()  # type: ignore[attr-defined]
+            lane_present = lane is not None
+    except Exception:  # noqa: BLE001 — lane probe must never crash doctor
+        lane_present = False
+    if not choir_enabled:
+        return CheckResult(10, "choir", title, PASS, ("choir: disabled (default)",))
+    if adapter_present and lane_present:
+        return CheckResult(
+            10,
+            "choir",
+            title,
+            PASS,
+            ("choir: enabled — adapter present, inert until /lens second-opinion",),
+        )
+    if adapter_present and not lane_present:
+        return CheckResult(
+            10,
+            "choir",
+            title,
+            WARN,
+            ("choir: enabled but host llm lane absent (will report unavailable)",),
+        )
+    return CheckResult(10, "choir", title, WARN, ("choir: enabled — adapter not found",))
+
+
 def check_render_sanity() -> CheckResult:
     """Check 9 — NO_COLOR / plain-render sanity (render twice + diff)."""
     title = "render sanity"
@@ -1026,7 +1087,7 @@ def _probe_route_table(home: Path) -> str:
 
 
 def run_doctor(view: Any) -> DoctorReport:
-    """Execute ALL NINE §11.9 checks in order; never raises.
+    """Execute ALL TEN §11.9 checks in order; never raises.
 
     Every check is individually contained: a crashing check becomes a FAIL
     row naming itself rather than an exception (advisor law applies to our
@@ -1066,6 +1127,7 @@ def run_doctor(view: Any) -> DoctorReport:
     guarded(7, "lifecycle", "lifecycle self-test", lambda: check_lifecycle_selftest(view_obj))
     guarded(8, "parse", "parse subsystem", check_parse_health)
     guarded(9, "render", "render sanity", check_render_sanity)
+    guarded(10, "choir", "choir posture", lambda: check_choir_posture(view_obj))
 
     policy_check = next((c for c in report.checks if c.key == "policy"), None)
     if policy_check is not None and policy_check.detail:

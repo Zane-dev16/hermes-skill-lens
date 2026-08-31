@@ -131,6 +131,24 @@ class FakePluginContext:
         self.commands: dict[str, dict[str, Any]] = {}
         self.cli_commands: dict[str, dict[str, Any]] = {}
         self._state = _FakePluginState(data_root)
+        self._llm: Any | None = None
+        self._llm_present = False
+
+    @property
+    def llm(self) -> Any | None:  # type: ignore[no-redef]
+        if not self._llm_present:
+            raise AttributeError("llm")
+        return self._llm
+
+    @llm.setter
+    def llm(self, value: Any | None) -> None:
+        self._llm = value
+        self._llm_present = True
+
+    @llm.deleter
+    def llm(self) -> None:
+        self._llm = None
+        self._llm_present = False
 
     # -- hook/command seams ----------------------------------------------------
 

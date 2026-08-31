@@ -1,8 +1,8 @@
 """Import-contract tests — SPEC §14 G1/G3 enforcement (D-PRIVACY).
 
 Two independent proofs that the DEFAULT Skill Lens pipeline contains zero
-network capability, plus one proof that the OSV adapter loads ONLY on the
-explicitly flagged codepath:
+network capability, plus two proofs that the opt-in adapters load ONLY on
+their explicitly flagged codepaths (OSV + Choir):
 
 1. **Default-closure subprocess test** — a pristine interpreter imports
    every shipped ``skill_lens`` module EXCEPT ``skill_lens.enrich.*``, then
@@ -18,6 +18,12 @@ explicitly flagged codepath:
    :func:`skill_lens.enrich.osv.enrich_envelope` requests it exactly once.
    This is the "importing enrich.osv happens only inside the flagged
    function" half of the contract.
+4. **Choir lazy-import proof** — the default pipeline never REQUESTS
+   ``skill_lens.choir``; the ``/lens second-opinion`` verb (or a direct
+   ``from skill_lens.choir import run_second_opinion``) requests it exactly
+   once. The module remains IN the subprocess walk (imports clean,
+   zero network) — proving "out of the default *call* closure" without an
+   import-graph exclusion.
 
 Honest scope note (R2, SPEC §14): these tests certify zero *direct*
 network capability in the shipped default path — not "no network path can
@@ -153,6 +159,36 @@ def test_enrich_osv_imported_only_on_flagged_codepath(monkeypatch) -> None:  # n
     assert "skill_lens.enrich.osv" in finder.requests
 
 
+def test_choir_imported_only_on_flagged_codepath(monkeypatch) -> None:  # noqa: ANN001
+    """Meta-path hook: default pipeline never requests choir; flagged verb does."""
+    sys.modules.pop("skill_lens.choir", None)
+    finder = _RecordingFinder({"skill_lens.choir"})
+    monkeypatch.setattr(sys, "meta_path", [finder, *sys.meta_path])
+
+    # -- default pipeline: same fixture walk must NOT request choir
+    from skill_lens.engines import scan_bundle  # noqa: F401
+    from skill_lens.render import render_chat_compact  # noqa: F401
+    from skill_lens.report import build_report, render_sarif  # noqa: F401
+
+    fixture = REPO_ROOT / "corpus" / "fixtures" / "benign" / "pinned-deps-helper"
+    result = scan_bundle(fixture)
+    envelope = build_report(result)
+    render_chat_compact(envelope, plugin_data_dir=None)
+    render_sarif(envelope)
+    assert finder.requests == [], "default pipeline imported choir — G1/G3 violation"
+
+    # -- flagged codepath: direct adapter import is the lazy boundary
+    finder.requests.clear()
+    from skill_lens.choir import run_second_opinion  # noqa: F401
+
+    assert "skill_lens.choir" in finder.requests
+    # Second import is cached — hook does not fire again, proving exactly-once load.
+    finder.requests.clear()
+    import skill_lens.choir as _choir_mod  # noqa: F401
+
+    assert finder.requests == [], "choir re-import should be cached"
+
+
 # ---------------------------------------------------------------------------
 # D-053 layout law: host-plugin load must not depend on a top-level
 # ``skill_lens`` import name. The Hermes host imports this plugin directory
@@ -180,9 +216,7 @@ def test_no_absolute_intra_package_imports() -> None:
     offenders: list[str] = []
     for source in sorted((REPO_ROOT / "skill_lens").rglob("*.py")):
         rel = source.relative_to(REPO_ROOT).as_posix()
-        for match in _ABSOLUTE_INTRA_PACKAGE_IMPORT.finditer(
-            source.read_text(encoding="utf-8")
-        ):
+        for match in _ABSOLUTE_INTRA_PACKAGE_IMPORT.finditer(source.read_text(encoding="utf-8")):
             line_no = source.read_text(encoding="utf-8")[: match.start()].count("\n") + 1
             offenders.append(f"{rel}:{line_no}: {match.group(0).strip()!r}")
     assert offenders == [], f"absolute intra-package imports: {offenders}"
@@ -296,7 +330,6 @@ def test_host_layout_load_end_to_end(tmp_path) -> None:  # noqa: ANN001
         cwd=str(tmp_path),
     )
     assert result.returncode == 0, (
-        f"host-layout load failed\nstdout: {result.stdout[-2000:]}\n"
-        f"stderr: {result.stderr[-2000:]}"
+        f"host-layout load failed\nstdout: {result.stdout[-2000:]}\nstderr: {result.stderr[-2000:]}"
     )
     assert "HOST-LAYOUT-OK" in result.stdout

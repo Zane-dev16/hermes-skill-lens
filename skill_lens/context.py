@@ -215,6 +215,16 @@ class PluginContextView:
         # caller can surface a structured diagnostic instead of crashing.
         return path
 
+    def llm_lane(self) -> Any | None:
+        """Host ctx.llm or None. Never constructs, never raises (T4: the lane
+        is the host's; its absence = choir unavailable, honestly reported)."""
+        try:
+            lane = getattr(self._raw, "llm", None)
+            return lane
+        except Exception:  # noqa: BLE001 — defensive view law
+            logger.debug("llm lane probe failed", exc_info=True)
+            return None
+
     @staticmethod
     def _coerce_and_prepare(value: Any) -> Path | None:
         """Coerce *value* to a Path, mkdir -p it; None when unusable."""

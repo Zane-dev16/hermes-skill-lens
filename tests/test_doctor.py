@@ -120,7 +120,7 @@ def wired_view(view: PluginContextView) -> PluginContextView:
 
 def test_nine_checks_run_in_spec_order(view: PluginContextView) -> None:
     report = run_doctor(view)
-    assert [c.number for c in report.checks] == list(range(1, 10))
+    assert [c.number for c in report.checks] == list(range(1, 11))
     keys = [c.key for c in report.checks]
     assert keys == [
         "rule-pack",
@@ -132,6 +132,7 @@ def test_nine_checks_run_in_spec_order(view: PluginContextView) -> None:
         "lifecycle",
         "parse",
         "render",
+        "choir",
     ]
     # No containment-law crashes: every check produced a real verdict row.
     for check in report.checks:
@@ -170,9 +171,7 @@ def test_check1_tampered_signature_fails_loudly(
     root = tmp_path / "plugin"
     (root / "skill_lens" / "rules").mkdir(parents=True)
     shutil.copytree(core_pack_path(), root / "skill_lens" / "rules" / "core")
-    shutil.copytree(
-        Path(__file__).resolve().parents[1] / "keys", root / "keys"
-    )
+    shutil.copytree(Path(__file__).resolve().parents[1] / "keys", root / "keys")
     # Flip one byte of pack semantics.
     target = root / "skill_lens" / "rules" / "core" / "pack.yaml"
     target.write_text(target.read_text(encoding="utf-8").replace("name: core", "name: corX", 1))
@@ -183,7 +182,7 @@ def test_check1_tampered_signature_fails_loudly(
         root=root, pack=load_pack(root / "skill_lens" / "rules" / "core")
     )
     assert result.status == FAIL
-    assert result.hard is True
+    assert result.hard is True  # noqa: F632
     joined = "\n".join(result.detail)
     assert "SIGNATURE MISMATCH" in joined or "REJECTED" in joined
     assert version and checksum.startswith("sha256:")
@@ -223,7 +222,7 @@ def test_check2_malformed_policy_file_fails_hard(
     report = run_doctor(view)
     check = report.checks[1]
     assert check.status == FAIL
-    assert check.hard is True
+    assert check.hard is True  # noqa: F632
     assert report.exit_code == 2
 
 
@@ -316,7 +315,7 @@ def test_render_slash_fenced_with_final_verdict_line(
     body, _, verdict = out.rpartition("\n")
     assert body.endswith("```") or "```" in body
     assert verdict.startswith("doctor: ")
-    assert verdict.endswith(("✓", "✗"))
+    assert verdict.endswith(("✓", "✗"))  # noqa: B011
 
 
 def test_verdict_line_grammar_matches_spec_example(
@@ -337,7 +336,7 @@ def test_render_cli_panel_box_aligned(wired_view: PluginContextView) -> None:
     assert lines[0].startswith("┌") and lines[-1].startswith("└")
     widths = {len(line) for line in lines}
     assert len(widths) == 1, f"ragged panel edges: {widths}"
-    assert all(line.startswith(("│", "┌", "├", "└")) for line in lines)
+    assert all(line.startswith(("│", "┌", "├", "└")) for line in lines)  # noqa: B011
 
 
 def test_render_plain_lane_strips_box_glyphs(wired_view: PluginContextView) -> None:
@@ -352,7 +351,7 @@ def test_results_mirror_to_events_ndjson(wired_view: PluginContextView) -> None:
     data_dir = wired_view.plugin_data_dir()
     run_doctor(wired_view)
     records = [
-        json.loads(line)
+        json.loads(line)  # noqa: S307
         for line in (data_dir / "events.ndjson").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
@@ -362,7 +361,7 @@ def test_results_mirror_to_events_ndjson(wired_view: PluginContextView) -> None:
     assert record["schema"] == "lens.events/1"
     assert record["status"] == "ok"
     assert record["exit_code"] == 0
-    assert len(record["checks"]) == 9
+    assert len(record["checks"]) == 10
     assert record["pack"]["version"]
     # Wall-clock ts rides the sidecar only.
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", record["ts"])
@@ -398,7 +397,7 @@ def test_negative_unwritable_plugin_data_dir_fails_check3_loudly(
     report = run_doctor(poisoned)
     check = report.checks[2]
     assert check.status == FAIL
-    assert check.hard is True
+    assert check.hard is True  # noqa: F632
     assert any("not writable" in d or "no usable plugin-data" in d for d in check.detail)
     assert report.exit_code == 2
     assert report.verdict_line().endswith("✗")
@@ -412,7 +411,7 @@ def test_negative_corrupt_jobs_json_fails_check3_loudly(
     report = run_doctor(view)
     check = report.checks[2]
     assert check.status == FAIL
-    assert check.hard is True
+    assert check.hard is True  # noqa: F632
     assert any("jobs.json corrupt/unhealthy" in d for d in check.detail)
     assert report.exit_code == 2
 
@@ -449,7 +448,7 @@ def test_negative_blocking_wiring_injection_fails_check5_loudly(
     report = run_doctor(wired_view)
     check = next(c for c in report.checks if c.key == "hook-wiring")
     assert check.status == FAIL
-    assert check.hard is True
+    assert check.hard is True  # noqa: F632
     assert any("BLOCKING WIRING FOUND" in d for d in check.detail)
     assert any("advisor law violated" in d for d in check.detail)
     assert report.exit_code == 2
@@ -478,7 +477,7 @@ def test_negative_isolation_guard_trips_on_socket_use() -> None:
 
     result = check_network_isolation(scan_fn=naughty_scan)
     assert result.status == FAIL
-    assert result.hard is True
+    assert result.hard is True  # noqa: F632
     assert any("SOCKET USE DETECTED" in d for d in result.detail)
 
 
@@ -554,4 +553,4 @@ def test_setup_parser_accepts_doctor_verb() -> None:
     setup_parser(parser)
     ns = parser.parse_args(["doctor"])
     assert ns.lens_verb == "doctor"
-    assert ns.plain is False
+    assert ns.plain is False  # noqa: F632

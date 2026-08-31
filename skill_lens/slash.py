@@ -96,9 +96,12 @@ verbs:
                        per pack)
   rules list [dir]     core + every pinned community pack: version, rule
                        count, checksum, pin-match (sorted, deterministic)
-  doctor               nine-check §11.9 self-check: pack, policy, state dirs,
+  second-opinion [name] [--json]
+                       LLM second opinion on the latest report (opt-in;
+                       requires policy [choir] enabled = true)
+  doctor               ten-check §11.9 self-check: pack, policy, state dirs,
                        host env, wiring audit (zero blocking hooks), network
-                       isolation, lifecycle, parse, render — verdict line last
+                       isolation, lifecycle, parse, render, choir — verdict line last
   help                 this block
 
 also hiding: /lens bones · /lens lens   (easter eggs; opt-in by invocation)
@@ -1548,10 +1551,155 @@ def _verb_rules(
     return "\n".join(lines)
 
 
+def _verb_second_opinion(args: list[str], *, view: PluginContextView, cache: FastPathCache) -> str:
+    """``/lens second-opinion [name] [--json]`` — downgrade-only LLM pass.
+
+    Two gates (SPEC §10/§14): policy ``[choir] enabled`` MUST be true AND
+    the verb must be invoked explicitly (consent-gated per call). Zero
+    findings short-circuits without constructing an LLM call (zero model
+    access on clean scans). Lazy imports ``skill_lens.choir`` ONLY here.
+    Never raises; every failure collapses to a one-line sober notice.
+    """
+    # Arg grammar: one optional positional (name), --json; unknown flags → usage.
+    positional: list[str] = []
+    want_json = False
+    unknown: list[str] = []
+    for token in args:
+        if token == "--json":
+            want_json = True
+        elif token.startswith("--"):
+            unknown.append(token)
+        elif token.startswith("-") and token != "-":
+            unknown.append(token)
+        else:
+            positional.append(token)
+    if unknown:
+        return _usage_line(offender=unknown[0])
+    if len(positional) > 1:
+        return _usage_line(offender=positional[1])
+    name = positional[0] if positional else None
+
+    # Gate 1 — policy (honest one-liner without any LLM call).
+    try:
+        from .policy import load_policy
+
+        policy = load_policy(ctx=view, report_date=_today())
+        choir_enabled = bool(getattr(policy, "choir_enabled", False))
+        # Fallback for host settings not yet in KNOWN_SETTINGS_KEYS:
+        # direct get_config allows tests and file-less enable via settings.
+        if not choir_enabled:
+            raw = view.get_config("choir.enabled", None)
+            if raw is not None:
+                if isinstance(raw, str):
+                    choir_enabled = raw.strip().lower() not in {"false", "0", "no", "off", ""}
+                else:
+                    choir_enabled = bool(raw)
+    except PolicyError:
+        raise
+    except Exception:  # noqa: BLE001 — degraded policy read → treat as disabled
+        choir_enabled = False
+    if not choir_enabled:
+        return "choir is disabled — set [choir] enabled = true in policy to opt in"
+
+    # Resolve cache entry (same source as /lens report).
+    entry: CacheEntry | None = None
+    if name is not None:
+        entry = cache.latest_by_name(name)
+        if entry is None:
+            return _report_without_entry(name, jobs=shared_jobs(view))
+    else:
+        entry = _latest_entry(cache)
+        if entry is None:
+            return "no lens reports cached yet — run `/lens scan <name|path>` first"
+
+    # Zero-findings short-circuit without touching llm lane.
+    import json as _json
+
+    try:
+        envelope = _json.loads(entry.envelope_json or "{}")
+    except ValueError:
+        return fast_line_fail(name=entry.name, reason="cached envelope unparsable")
+    if not isinstance(envelope, dict):
+        return fast_line_fail(name=entry.name, reason="cached envelope unparsable")
+    findings = envelope.get("findings") or []
+    active = [  # noqa: E501
+        f  # noqa: E501
+        for f in findings  # noqa: E501
+        if isinstance(f, dict) and not f.get("suppressed") and not f.get("llm_touched")  # noqa: E501
+    ]
+    if not active:
+        # Still record a sidecar (no_actions) via the adapter so ledger stays honest?
+        # Brief says zero findings answers without constructing an LLM call — we honor that
+        # by calling the adapter which itself will short-circuit without LLM.
+        try:
+            from .choir import run_second_opinion  # type: ignore  # LAZY
+        except Exception:  # noqa: BLE001 — import must never crash the verb
+            logger.exception("choir import failed")
+            return f"lens choir {entry.name} · unavailable · adapter unloadable"
+        report = run_second_opinion(
+            envelope, view.llm_lane(), name=entry.name, data_dir=view.plugin_data_dir()
+        )
+        line = f"lens choir {entry.name} · no findings to review"
+        if want_json:
+            line += f"\n```json\n{canonical_dumps(report.to_dict())}\n```"
+        return line
+
+    # Normal path — lazy import and invoke adapter (one call, bounded).
+    try:
+        from .choir import run_second_opinion  # type: ignore  # LAZY
+    except Exception:  # noqa: BLE001 — import must never crash the verb
+        logger.exception("choir import failed")
+        return f"lens choir {entry.name} · unavailable · adapter unloadable"
+    try:
+        report = run_second_opinion(
+            envelope, view.llm_lane(), name=entry.name, data_dir=view.plugin_data_dir()
+        )
+    except Exception:  # noqa: BLE001 — adapter never raises, but contain anyway
+        logger.exception("choir second-opinion failed")
+        return fast_line_fail(name=entry.name, reason="choir unavailable — see logs")
+
+    # Render one-liner + bounded disposition list (≤5 lines).
+    status = str(getattr(report, "status", "unavailable") or "unavailable")
+    actions = list(getattr(report, "actions", []) or [])
+    reviewed = list(getattr(report, "reviewed", []) or [])
+    errors = list(getattr(report, "errors", []) or [])
+    if status == "unavailable":
+        reason = errors[0] if errors else "unavailable"
+        base = f"lens choir {entry.name} · unavailable · {reason}"
+    elif status == "no_actions":
+        base = f"lens choir {entry.name} · no actions · reviewed {len(reviewed)}"
+    else:  # applied or any other — honest count phrase
+        base = (
+            f"lens choir {entry.name} · {status} · reviewed {len(reviewed)} · "
+            f"{len(actions)} action(s)"
+        )  # noqa: E501
+    # Disposition list — at most 5 lines, one per action.
+    if actions:
+        for act in actions[:5]:
+            fid = str(act.get("finding_id", ""))
+            frm = str((act.get("from") or {}).get("effective_severity", ""))
+            to = str((act.get("to") or {}).get("effective_severity", ""))
+            reason = str(act.get("reason", ""))[:160]
+            arrow = f"{frm}→{to}" if frm and to and frm != to else (frm or to or fid)
+            # Include clamped marker when relevant.
+            clamp_mark = " (clamped)" if act.get("clamped") else ""
+            line = (  # noqa: E501
+                f"{fid} {arrow}{clamp_mark} · {reason}" if reason else f"{fid} {arrow}{clamp_mark}"
+            )
+            base += f"\n{line}"
+    if want_json:
+        try:
+            payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)  # type: ignore[arg-type]
+        except Exception:
+            payload = {"status": status, "errors": errors}
+        base += f"\n```json\n{canonical_dumps(payload)}\n```"
+    return base
+
+
 def _verb_doctor(
     args: list[str], *, view: PluginContextView, sink: dict[str, Any] | None = None
 ) -> str:
-    """§11.9 nine-check self-check; same engine as ``hermes lens doctor``.
+    """§11.9 ten-check self-check; same engine as ``hermes lens doctor``.
 
     Never raises (the safe-handler wrapper would catch it, but the verb
     itself must not depend on that). No pull banner — operational surface,
@@ -1710,6 +1858,9 @@ def dispatch_verb(
         # §15 governance surface: operational, no pull banner. The CLI lane
         # projects sink["rules_exit"] onto §18's total-error code.
         return _verb_rules(args, view=view, sink=sink)
+    elif verb == "second-opinion":
+        # Choir lane: downgrade-only, opt-in, outside the envelope.
+        return _verb_second_opinion(args, view=view, cache=cache)
     elif verb == "doctor":
         # §11.9 nine-check engine: operational surface — no pull banner.
         return _verb_doctor(args, view=view, sink=sink)
