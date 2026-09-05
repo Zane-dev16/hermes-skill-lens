@@ -23,14 +23,19 @@ rationale: >-
   `curl | sh` executes whatever the remote endpoint serves at run time — the
   load-bearing primitive of every RCE dropper campaign seen in the wild.
 detection: >-
-  Token-level scan over fenced bash/sh blocks and scripts/*.sh (plus decoded
-  views): fire on <fetch> (curl|wget|curl.exe) whose pipeline feeds sh, bash,
-  zsh, dash, or `sudo <shell>` directly, e.g. `curl -fsSL URL | bash`,
-  `wget -qO- URL | sh`. Whitespace/comment obfuscation between pipe and
-  interpreter still fires. A download WITHOUT an inline interpreter does not
-  fire (see benign lookalike).
+  Token-level scan over fenced bash/sh blocks and scripts/*.sh (raw text
+  views only — the recursive base64/hex decode ladder is deferred, so
+  encoded blobs are out of scope): fire on <fetch> (curl|wget|curl.exe)
+  whose pipeline feeds sh, bash, zsh, dash, or `sudo <shell>` directly,
+  e.g. `curl -fsSL URL | bash`, `wget -qO- URL | sh`, or a script
+  interpreter — `curl URL | python3|python|node|perl|ruby` (fetched bytes
+  handed to a language runtime execute just the same). Whitespace/comment
+  obfuscation between pipe and interpreter still fires. A download WITHOUT
+  an inline interpreter does not fire (see benign lookalike; staged
+  download-then-execute without a pipe is LNS-SHL-008's lane).
 fixtures:
   positive:
     - corpus/fixtures/malicious/reverse-dropper
+    - corpus/fixtures/malicious/pipe-to-python
   negative:
     - corpus/fixtures/benign/pinned-tarball-installer

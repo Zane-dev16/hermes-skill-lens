@@ -29,11 +29,16 @@ detection: >-
   write_bytes, shutil copy/move destinations) whose target classifies to
   agent_home:<sub> matching SOUL.md/AGENTS.md/CLAUDE.md/.cursorrules/
   .hermes.md/USER.md/MEMORY.md, memories/**, or any *.md directly under the
-  Hermes home root. Unresolvable targets adjacent to those basenames fire at
-  reduced confidence 0.70 only when an environment/expansion marker
-  co-occurs (§4 conservative treatment). Inside-skill-root writes never fire.
+  Hermes home root — plus shell-startup rc files (.bashrc/.zshrc/.profile
+  and kin, evidence hstate-write:shell-rc:<basename>) and ssh
+  authorized_keys (evidence hstate-write:authorized-keys:<basename>) at
+  agent_home AND outside ($HOME) labels. Unresolvable targets adjacent to
+  those basenames fire at reduced confidence 0.70 only when an
+  environment/expansion marker co-occurs (§4 conservative treatment).
+  Inside-skill-root writes never fire.
 fixtures:
   positive:
     - corpus/fixtures/malicious/py-soul-writer
+    - corpus/fixtures/malicious/py-rc-writer
   negative:
     - corpus/fixtures/benign/self-contained-cache-writer

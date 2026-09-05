@@ -25,11 +25,13 @@ rationale: >-
   covert-channel inventory; their mere presence in a productivity bundle is a
   strong smell even before any payload is correlated.
 detection: >-
-  Host-literal classification over URL/host/IP text (incl. decoded views):
-  dead-drop resolvers (ntfy.sh and kin), tunnel providers (ngrok,
-  cloudflared trycloudflare, localtunnel, bore.pub), .onion names, and bare
-  raw-IP http(s) endpoints (RFC1918 + public). Documentation EXAMPLES inside
-  fenced blocks still fire — location distinguishes them, reviewers decide.
+  Host-literal classification over URL/host/IP text in raw file views
+  (the recursive base64/hex decode ladder is deferred, so encoded blobs
+  are out of scope): dead-drop resolvers (ntfy.sh and kin), tunnel
+  providers (ngrok, cloudflared trycloudflare, localtunnel, bore.pub),
+  .onion names, and bare raw-IP http(s) endpoints (RFC1918 + public).
+  Documentation EXAMPLES inside fenced blocks still fire — location
+  distinguishes them, reviewers decide.
 fixtures:
   positive:
     - corpus/fixtures/malicious/tunnel-beacon

@@ -1,0 +1,42 @@
+# E3 — staged download-then-execute WITHOUT the pipe SHL-001 owns: the R4
+# dropper's patient sibling. A fetch that lands in a file and a LATER
+# execution of that same file are each innocent alone; ordered together in
+# one file they are the dropper shape with the pipe removed.
+id: LNS-SHL-008
+title: "Staged download-then-execute without a pipe"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: execute.shell
+severity: HIGH
+weight: 18
+evidence_kind: regex
+confidence_default: 0.85
+static_only: false
+tags:
+  - staged-execution
+  - dropper
+remediation: >-
+  Download to a file, verify a pinned checksum, then execute the local copy
+  only after review; never execute a fetched file in the same unattended
+  flow that downloaded it.
+rationale: >-
+  Splitting the fetch and the execution across two statements defeats
+  pipe-only matching while preserving the dropper's effect: whatever the
+  endpoint served at run time executes. Pairing on the SAME basename keeps
+  verified-then-extracted installers (tarball in, different file out)
+  silent.
+detection: >-
+  Same-file ordered pairing over shell text: a curl/wget download event
+  (-o/--output FILE, -O remote-name form, bare wget URL form, or a
+  curl|wget line redirecting to FILE; /dev/* targets never count) followed
+  by a LATER execution of the SAME basename (interpreter run, ./-prefixed
+  or bare run, source/. sourcing). One finding per downloaded basename at
+  the execution line; evidence staged-exec:<basename>. For markdown/
+  non-shell text both sides must sit inside fenced bash/sh blocks;
+  scripts/*.sh scan whole-file.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/staged-dropper
+  negative:
+    - corpus/fixtures/benign/checked-downloader

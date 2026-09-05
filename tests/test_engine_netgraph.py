@@ -8,8 +8,6 @@ pairing, and every finding carries the §8.2 declared modifier flag.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -24,19 +22,12 @@ from skill_lens.engines.e6_netgraph import (
     host_suffix_match,
 )
 from skill_lens.rules import load_core_pack
+from tests.conftest import _bundle
 
 
 @pytest.fixture(scope="module")
 def pack():
     return load_core_pack()
-
-
-def _bundle(root: Path, files: dict[str, str]) -> Path:
-    for rel, text in files.items():
-        dest = root / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
-    return root
 
 
 def _rule_findings(result, rule_id):

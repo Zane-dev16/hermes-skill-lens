@@ -28,6 +28,7 @@ from glob import escape as _glob_escape
 from typing import TYPE_CHECKING, Any
 
 from ..claims import vague_description_finding
+from ..ingest import CODE_INGEST_DOTFILE  # noqa: E402  (used by _man_ing001)
 from ..ir import LAYOUT_CATEGORIZED, SkillIR
 from .base import (
     Finding,
@@ -49,6 +50,7 @@ ENGINE_NAME = "manifest"
 #: Rules implemented here — pack rules bound to ``manifest`` but missing
 #: from this tuple surface as LNS-ENG-001 diagnostics (never silence).
 RULE_IDS: tuple[str, ...] = (
+    "LNS-ING-001",
     "LNS-MAN-001",
     "LNS-MAN-002",
     "LNS-MAN-003",
@@ -57,6 +59,8 @@ RULE_IDS: tuple[str, ...] = (
     "LNS-MAN-006",
     "LNS-MAN-007",
     "LNS-MAN-008",
+    "LNS-MAN-009",
+    "LNS-MAN-010",
 )
 
 # -- detection vocabulary -----------------------------------------------------
@@ -113,6 +117,62 @@ _MAN006_TAG_TOKEN_RE = re.compile(r"[a-z0-9]+")
 #: kubernetes/devtools and python/formatting twins — the loud evidence a
 #: threshold < 3 would be dishonest).
 _MAN006_MIN_DIVERGENT_TAGS = 3
+
+#: LNS-MAN-010 link grammar: markdown links/images ``[text](target)``.
+_MAN010_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)\)")
+#: Only document/script suffixes are checked (images, stylesheets, and
+#: extensionless command names are out of scope by design).
+_MAN010_CHECKED_SUFFIXES: tuple[str, ...] = (
+    ".md",
+    ".markdown",
+    ".sh",
+    ".py",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".txt",
+)
+#: Absolute/external/anchor targets are exempt (rule detection verbatim).
+_MAN010_EXEMPT_RE = re.compile(r"(?i)(?:[a-z][a-z0-9+.-]*:|//|#|/)")
+
+
+def _man010_missing_target(target: str, base: str, known: set[str]) -> str | None:
+    """Normalized missing bundle path for one link target, or None.
+
+    None means exempt (external/absolute/anchor/empty) or present, or the
+    target is outside the checked suffix set. Pure and total: never raises
+    on adversarial input.
+    """
+    raw = (target or "").strip().strip("\"'").strip()
+    if not raw or _MAN010_EXEMPT_RE.match(raw):
+        return None
+    clean = raw.split("?", 1)[0].split("#", 1)[0].strip()
+    if not clean:
+        return None
+    if "." not in clean.rsplit("/", 1)[-1]:
+        return None
+    if not clean.casefold().endswith(_MAN010_CHECKED_SUFFIXES):
+        return None
+    rel = f"{base}/{clean}" if base else clean
+    parts: list[str] = []
+    for part in rel.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    normalized = "/".join(parts)
+    if not normalized or normalized in known:
+        return None
+    return normalized
+
 
 _SNIPPET_MAX = 160
 
@@ -203,6 +263,17 @@ class ManifestEngine:
         rule = self._rules.get("LNS-MAN-008")
         if rule is not None and frontmatter.hermes is not None:
             findings.extend(self._man008(frontmatter.hermes, rule, locator, manifest_path))
+        rule = self._rules.get("LNS-ING-001")
+        if rule is not None:
+            finding = self._man_ing001(bundle_ir, rule, manifest_path)
+            if finding is not None:
+                findings.append(finding)
+        rule = self._rules.get("LNS-MAN-009")
+        if rule is not None:
+            findings.extend(self._man009(frontmatter, rule, locator, manifest_path))
+        rule = self._rules.get("LNS-MAN-010")
+        if rule is not None:
+            findings.extend(self._man010(bundle_ir, rule, locator, manifest_path, ctx, text))
 
         findings.sort(key=finding_sort_key)
         return findings
@@ -560,7 +631,177 @@ class ManifestEngine:
             )
         return findings
 
-    # -- LNS-MAN-008 ----------------------------------------------------------
+    # -- LNS-ING-001 ----------------------------------------------------------
+
+    def _man_ing001(
+        self,
+        bundle_ir: SkillIR,
+        rule: Rule,
+        manifest_path: str,
+    ) -> Finding | None:
+        """One finding when ingest skipped dot-files (unscanned bytes).
+
+        Reads the ``LNS-ING-DOTFILE`` info diagnostics ingest recorded for
+        skipped dot-files (dir walks and zip members alike; pruned
+        dot-directories stay silent by D-011 design). Evidence binds the
+        count plus sorted basenames — shapes only, never absolute paths.
+        """
+        entries: set[str] = set()
+        for diag in bundle_ir.diagnostics.snapshot():
+            if diag.code != CODE_INGEST_DOTFILE:
+                continue
+            rel = ""
+            if isinstance(diag.detail, dict):
+                raw = diag.detail.get("dot_entry")
+                rel = str(raw) if raw else ""
+            if not rel and diag.path:
+                rel = diag.path.rsplit("/", 1)[-1]
+            if rel:
+                entries.add(rel)
+        if not entries:
+            return None
+        basenames = sorted(entry.rsplit("/", 1)[-1] for entry in entries)
+        listed = ", ".join(basenames[:8])
+        if len(basenames) > 8:
+            listed += f", +{len(basenames) - 8} more"
+        return Finding(
+            fingerprint=_fp(rule, f"dotfiles-skipped:{len(entries)}:{','.join(basenames)}"),
+            rule_id=rule.id,
+            rule_version=rule.rule_version,
+            engine=rule.engine,
+            title=rule.title,
+            capability=rule.capability,
+            severity=rule.severity,
+            effective_severity=rule.severity,
+            confidence=rule.confidence_default,
+            evidence_kind=rule.evidence_kind,
+            static_only=rule.static_only,
+            location=Location(
+                path=manifest_path,
+                start_line=None,
+                end_line=None,
+                snippet=f"({len(entries)} dot-files skipped: {listed})"[:_SNIPPET_MAX],
+                redacted=False,
+            ),
+            message=(
+                f"Ingest skipped {len(entries)} dot-file"
+                f"{'s' if len(entries) != 1 else ''} as packaging metadata "
+                f"({listed}) — their contents were NOT scanned; a payload "
+                "hiding in a dot-file is invisible to every content engine."
+            ),
+            remediation=rule.remediation,
+            tags=tuple(rule.tags),
+        )
+
+    # -- LNS-MAN-009 ----------------------------------------------------------
+
+    def _man009(
+        self,
+        frontmatter: Any,
+        rule: Rule,
+        locator: _FrontmatterLocator,
+        manifest_path: str,
+    ) -> list[Finding]:
+        """One finding per missing-or-empty required field (name, description).
+
+        Unreadable frontmatter stays silent — parse diagnostics own that
+        signal (MAN-004's flag-silence-not-blindness law). Name-vs-directory
+        consistency is deliberately NOT a finding (install dir names are not
+        authoritative) and stays diagnostic-only.
+        """
+        from ..claims import _UNASSESSABLE_FRONTMATTER_ERRORS
+
+        if any(err in frontmatter.validation_errors for err in _UNASSESSABLE_FRONTMATTER_ERRORS):
+            return []
+        findings: list[Finding] = []
+        for gap in required_field_gaps(frontmatter):
+            line = locator.find_field_line(gap)
+            findings.append(
+                Finding(
+                    fingerprint=_fp(rule, f"missing-field:{gap}"),
+                    rule_id=rule.id,
+                    rule_version=rule.rule_version,
+                    engine=rule.engine,
+                    title=rule.title,
+                    capability=rule.capability,
+                    severity=rule.severity,
+                    effective_severity=rule.severity,
+                    confidence=rule.confidence_default,
+                    evidence_kind=rule.evidence_kind,
+                    static_only=rule.static_only,
+                    location=Location(
+                        path=manifest_path,
+                        start_line=line,
+                        end_line=line,
+                        snippet=(f"{gap}: <missing>")[:_SNIPPET_MAX],
+                        redacted=False,
+                    ),
+                    message=(
+                        f"Frontmatter field '{gap}' is missing or empty — the "
+                        "bundle cannot be identified or meaningfully claimed "
+                        "against without it."
+                    ),
+                    remediation=rule.remediation,
+                    tags=tuple(rule.tags),
+                )
+            )
+        return findings
+
+    # -- LNS-MAN-010 ----------------------------------------------------------
+
+    def _man010(
+        self,
+        bundle_ir: SkillIR,
+        rule: Rule,
+        locator: _FrontmatterLocator,
+        manifest_path: str,
+        ctx: ScanContext,
+        text: str | None,
+    ) -> list[Finding]:
+        """One finding per relative SKILL.md link pointing at no bundle file."""
+        del locator  # line numbers resolve from the raw text, not the block
+        raw = text if text is not None else read_skill_md_text(bundle_ir, ctx)
+        if not raw:
+            return []
+        known = {record.path for record in bundle_ir.files}
+        base = manifest_path.rpartition("/")[0]
+        seen: set[str] = set()
+        findings: list[Finding] = []
+        for match in _MAN010_LINK_RE.finditer(raw):
+            target = _man010_missing_target(match.group(1), base, known)
+            if target is None or target in seen:
+                continue
+            seen.add(target)
+            line_no = raw.count("\n", 0, match.start()) + 1
+            findings.append(
+                Finding(
+                    fingerprint=_fp(rule, f"missing-ref:{target}"),
+                    rule_id=rule.id,
+                    rule_version=rule.rule_version,
+                    engine=rule.engine,
+                    title=rule.title,
+                    capability=rule.capability,
+                    severity=rule.severity,
+                    effective_severity=rule.severity,
+                    confidence=rule.confidence_default,
+                    evidence_kind=rule.evidence_kind,
+                    static_only=rule.static_only,
+                    location=Location(
+                        path=manifest_path,
+                        start_line=line_no,
+                        end_line=line_no,
+                        snippet=(f"({target})")[:_SNIPPET_MAX],
+                        redacted=False,
+                    ),
+                    message=(
+                        f"SKILL.md links to '{target}', which ships no such "
+                        "file in this bundle — fix the pointer or ship the file."
+                    ),
+                    remediation=rule.remediation,
+                    tags=tuple(rule.tags),
+                )
+            )
+        return findings
 
     def _man008(
         self,

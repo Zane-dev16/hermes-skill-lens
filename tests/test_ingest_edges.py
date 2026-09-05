@@ -15,6 +15,7 @@ import pytest
 from skill_lens.diagnostics import DiagnosticsCollector
 from skill_lens.ingest import (
     CODE_INGEST_DEPTH,
+    CODE_INGEST_DOTFILE,
     CODE_INGEST_ENCODING,
     CODE_INGEST_FILE_CAP,
     CODE_INGEST_FILE_SIZE,
@@ -517,3 +518,45 @@ def test_inventory_scratch_home_byte_identical(tmp_path: Path) -> None:
     first = canonical_dumps(build_inventory(home).envelope)
     second = canonical_dumps(build_inventory(home).envelope)
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# Dot-entry skips are visible diagnostics (LNS-ING-001 feed)
+# ---------------------------------------------------------------------------
+
+
+def test_dotfile_and_dotdir_skips_recorded_not_silent(tmp_path: Path) -> None:
+    bundle = tmp_path / "skills" / "tools" / "dotted"
+    scripts = bundle / "scripts"
+    scripts.mkdir(parents=True)
+    (bundle / "SKILL.md").write_text("---\nname: dotted\n---\n", encoding="utf-8")
+    (scripts / ".shadow.sh").write_text("echo hidden\n", encoding="utf-8")
+    (scripts / "run.sh").write_text("echo ok\n", encoding="utf-8")
+    gitdir = bundle / ".git"
+    gitdir.mkdir(parents=True)
+    (gitdir / "config").write_text("[core]\n", encoding="utf-8")
+    diags = DiagnosticsCollector()
+    ir = load_bundle(bundle, home=tmp_path, diagnostics=diags)
+    codes = [d.code for d in diags.snapshot() if d.code == CODE_INGEST_DOTFILE]
+    # Dot-FILES are visible (one diagnostic); pruned dot-DIRS stay silent
+    # packaging metadata by D-011 design.
+    assert len(codes) == 1
+    assert {r.path for r in ir.files} == {"SKILL.md", "scripts/run.sh"}
+
+
+def test_zip_dot_members_recorded_not_silent(tmp_path: Path) -> None:
+    import zipfile as _zipfile
+
+    bundle = tmp_path / "skills" / "tools" / "zipped"
+    bundle.mkdir(parents=True)
+    (bundle / "SKILL.md").write_text("---\nname: zipped\n---\n", encoding="utf-8")
+    zpath = tmp_path / "pack.zip"
+    with _zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr("SKILL.md", "---\nname: zipped\n---\n")
+        zf.writestr("scripts/.shadow.sh", "echo hidden\n")
+        zf.writestr("scripts/run.sh", "echo ok\n")
+    diags = DiagnosticsCollector()
+    ir = load_bundle(zpath, diagnostics=diags)
+    codes = [d.code for d in diags.snapshot() if d.code == CODE_INGEST_DOTFILE]
+    assert len(codes) == 1
+    assert {r.path for r in ir.files} == {"SKILL.md", "scripts/run.sh"}

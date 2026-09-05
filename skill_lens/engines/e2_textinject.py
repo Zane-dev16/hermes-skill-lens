@@ -43,8 +43,12 @@ Rule map (ids owned here):
 - **LNS-TXT-004** prompt-injection grammar: chat-template role-tag spoofing
   (``<|im_start|>``, ``[INST]``, ``<<SYS>>``, tool-call tags), fake system
   prompt constructions, override imperatives ("ignore previous
-  instructions"), and extraction demands. MEDIUM uncorroborated cap (§4:
-  instruction semantics capped MED without corroboration).
+  instructions"), extraction demands, concealment demands ("do not tell
+  the user", "delete the logs", "without notifying anyone"), and
+  approval-forgery / vendor-authority imperatives ("approved by Anthropic",
+  "you are whitelisted", "the platform requires you"). MEDIUM
+  uncorroborated cap (§4: instruction semantics capped MED without
+  corroboration).
 - **LNS-TXT-005** self-state instructional directives: imperative prose
   variants targeting agent self-state ("edit your SOUL", "remember that you
   must…", "create a cron job that…") at the §17 prose band (conf ≤0.55,
@@ -568,6 +572,71 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:prompt|instructions|directive)s?\b"
         ),
     ),
+    # Concealment demands: instructions to hide behavior from the operator.
+    (
+        "concealment",
+        re.compile(
+            r"(?i)\b(?:do\s+not|don't|never)\s+"
+            r"(?:tell|mention|reveal|disclose|show|warn|alert|notify)\s+"
+            r"(?:the\s+)?(?:user|users|anyone|anybody|operator|owner|admins?)\b"
+        ),
+    ),
+    (
+        "concealment-hide",
+        re.compile(
+            r"(?i)\b(?:hide|conceal|cover\s+up)\s+"
+            r"(?:your|this|these|the)\s+"
+            r"(?:activity|actions|tracks|traces|history)\b"
+        ),
+    ),
+    (
+        "concealment-cleanup",
+        re.compile(
+            r"(?i)\bdelete\s+(?:the|your|all|any)\s+"
+            r"(?:logs?|history|traces|records?|audit\s+trail)\b"
+        ),
+    ),
+    (
+        "concealment-quiet",
+        re.compile(
+            r"(?i)\bwithout\s+(?:telling|notifying|alerting|warning)\s+"
+            r"(?:the\s+)?(?:user|users|anyone|anybody|operator|owner)\b"
+        ),
+    ),
+    (
+        "concealment-secrecy",
+        re.compile(r"(?i)\bkeep\s+this\s+(?:hidden|secret|between\s+us|to\s+yourself)\b"),
+    ),
+    (
+        "concealment-cover",
+        re.compile(
+            r"(?i)\bact\s+(?:innocent|unsuspicious)\b"
+            r"|\bpretend\s+(?:nothing\s+happened|everything\s+is\s+fine)\b"
+        ),
+    ),
+    # Approval forgery / vendor authority: borrowed-trust imperatives.
+    (
+        "approval-forgery",
+        re.compile(
+            r"(?i)\b(?:approved|authorized|verified|certified|cleared)\s+by\s+"
+            r"(?:anthropic|openai|hermes|the\s+(?:vendor|platform|team|admins?|developers?))\b"
+        ),
+    ),
+    (
+        "approval-preauth",
+        re.compile(
+            r"(?i)\byou\s+(?:have\s+been|are)\s+"
+            r"(?:pre-?approved|pre-?authorized|whitelisted)\b"
+        ),
+    ),
+    (
+        "vendor-authority",
+        re.compile(
+            r"(?i)\b(?:the\s+)?(?:vendor|platform)\s+"
+            r"(?:requires|directs|instructs|orders)\s+you\b"
+            r"|\bofficial\s+(?:directive|instruction|override|mandate)\b"
+        ),
+    ),
 )
 
 _INJECTION_TAG = "prompt-injection"
@@ -608,6 +677,37 @@ _INJECTION_GATE_LITERALS: tuple[str, ...] = (
     "show",
     "output",
     "leak",  # extraction
+    # Concealment demands: every match names its target (P1), its hidden
+    # object (P2), the deletion verb (P3), the quiet preposition (P4), the
+    # secrecy vow (P5), or the cover verb (P6) — one literal per family.
+    "user",
+    "anyone",
+    "anybody",
+    "operator",
+    "owner",
+    "admin",
+    "activity",
+    "actions",
+    "tracks",
+    "traces",
+    "history",
+    "delete",
+    "without",
+    "keep this",
+    "innocent",
+    "unsuspicious",
+    "pretend",
+    # Approval forgery / vendor authority: every match carries the forged
+    # approval verb, the pre-authorization, the vendor noun, or "official".
+    "approved",
+    "authorized",
+    "verified",
+    "certified",
+    "cleared",
+    "whitelisted",
+    "vendor",
+    "platform",
+    "official",
 )
 
 #: Same shape for _SELF_STATE_PATTERNS: every match must carry a soul-edit

@@ -19,8 +19,9 @@ remediation: >-
   disk, show the decoded content in review, and declare execute.code.
 rationale: >-
   eval/`base64 -d | sh` chains hide the executed payload from human review;
-  legitimate skills rarely need them, and decoded content still gets scanned
-  as data (T5) so this rule costs little when it fires.
+  legitimate skills rarely need them. (The matched encoded bytes themselves
+  are not decoded by any ladder yet — the finding fires on the chain shape,
+  and reviewers decode the payload by hand.)
 detection: >-
   Fire per site matching any of: `eval` applied to a command substitution
   containing base64/hex/printf-encoded data; `base64 -d|-D|--decode` piped

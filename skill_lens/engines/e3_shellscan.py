@@ -4,8 +4,9 @@ Detection per core-pack rule specs (rule YAMLs are normative; §17 rows R4,
 R6, R11, H1, H2, H5, H6, H9):
 
 - **LNS-SHL-001** remote fetch piped straight into a shell interpreter
-  (``curl -fsSL URL | bash``); whitespace-obfuscated pipes still fire, a
-  download WITHOUT an inline interpreter does not.
+  (``curl -fsSL URL | bash``) or a script interpreter (``curl URL |
+  python3``, ``| node``, ``| perl``, ``| ruby``); whitespace-obfuscated
+  pipes still fire, a download WITHOUT an inline interpreter does not.
 - **LNS-SHL-002** obfuscated execution chains: ``eval`` over encoded command
   substitution, ``base64 -d | sh``, hex-printf-to-shell, python/perl
   decode-and-exec one-liners.
@@ -16,17 +17,31 @@ R6, R11, H1, H2, H5, H6, H9):
 - **LNS-SHL-004** writes into agent persona/memory state — normalized
   ``agent_home:<sub>`` sink labels (SOUL.md, AGENTS.md, CLAUDE.md,
   .cursorrules, .hermes.md, USER.md, MEMORY.md, memories/**, any *.md on the
-  Hermes home root). Unknown-path writes adjacent to those basenames fire at
-  reduced confidence 0.70.
+  Hermes home root) — plus durable SHELL/ACCESS persistence targets at any
+  label: shell-startup rc files (~/.bashrc and kin) and ssh
+  ``authorized_keys``. Unknown-path writes adjacent to those basenames fire
+  at reduced confidence 0.70.
 - **LNS-SHL-005** recurring execution: ``cron/jobs.json`` writes under the
   Hermes home, crontab mutations, systemd user timers, ``hermes cron add``.
   Payload-marker escalation (credential/network tokens inside a written
   heredoc body) raises confidence toward 0.95 without changing the tier.
 - **LNS-SHL-006** agent configuration / gateway-state writes (config.yaml,
-  channel_directory.json, pairing/**). Engine-side escalation: a
-  ``platform_disabled`` token or security-tool disable in the written payload
-  escalates effective_severity toward CRITICAL (no benign authoring story).
-  Reads of config.yaml NEVER fire — only sink sites trigger.
+  channel_directory.json, pairing/**), git-hook planting (``.git/hooks/``
+  writes execute on future git operations), and ``git config
+  http.extraheader`` invocations (planted auth headers exfiltrate future git
+  traffic). Engine-side escalation: a ``platform_disabled`` token or
+  security-tool disable in the written payload escalates effective_severity
+  toward CRITICAL (no benign authoring story). Reads of config.yaml NEVER
+  fire — only sink sites trigger.
+- **LNS-SHL-008** staged download-then-execute WITHOUT a pipe: a file
+  fetched via curl/wget (``-o``/``-O``/redirect) that a LATER line executes
+  (interpreter, ``./``/bare run, ``source``). The executed basename must
+  match the downloaded one — verified-then-extracted installers (tarball
+  in, different file out) stay silent.
+- **LNS-SHL-009** cross-platform dropper vocabulary: Windows
+  (``iwr | iex``, ``schtasks /create``, ``reg add`` Run keys) and macOS
+  (``launchctl load/bootstrap/submit``, ``osascript -e``) execution and
+  persistence primitives inside shell text.
 
 DECLARED-DISCOUNT interaction (task deliverable / §8.2 ×0.5 ``declared``
 modifier): every finding carries ``declared =
@@ -71,6 +86,8 @@ RULE_IDS: tuple[str, ...] = (
     "LNS-SHL-005",
     "LNS-SHL-006",
     "LNS-SHL-007",
+    "LNS-SHL-008",
+    "LNS-SHL-009",
 )
 
 # ---------------------------------------------------------------------------
@@ -80,6 +97,28 @@ RULE_IDS: tuple[str, ...] = (
 PERSONA_BASENAMES: frozenset[str] = frozenset(
     {"soul.md", "agents.md", "claude.md", ".cursorrules", ".hermes.md", "user.md", "memory.md"}
 )
+#: Shell-startup rc files: sourced by every interactive shell, so a write
+#: here is durable code execution one terminal open away — the POSIX half of
+#: the SHL-004 persistence family (matched case-insensitively on basenames).
+PERSISTENCE_RC_BASENAMES: frozenset[str] = frozenset(
+    {
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".profile",
+        ".zshrc",
+        ".zprofile",
+        ".zshenv",
+        ".shrc",
+        ".kshrc",
+        ".cshrc",
+        ".tcshrc",
+        ".login",
+        ".logout",
+    }
+)
+#: SSH access persistence: one appended key is permanent remote entry.
+AUTHORIZED_KEYS_BASENAME = "authorized_keys"
 _GATEWAY_BASENAMES: tuple[str, ...] = ("channel_directory.json",)
 
 _HERMES_HOME_PREFIX_RE = re.compile(r"^\$\{HERMES_HOME(?::-[^}]*)?\}|^\$HERMES_HOME\b")
@@ -111,6 +150,17 @@ class PathLabel:
 
 def _clean_token(token: str) -> str:
     return token.strip().strip("\"'").strip()
+
+
+def _is_git_hooks_path(token: str) -> bool:
+    """True when *token* points inside a ``.git/hooks/`` directory (pure).
+
+    Case-insensitive on the ``.git``/``hooks`` segments (filesystems vary);
+    the match must be a real path SEGMENT (``agit/hooks/x`` never matches).
+    Shared with E4/E5 routing so all three engines agree on the shape.
+    """
+    cleaned = _clean_token(token).casefold().replace("\\", "/")
+    return "/.git/hooks/" in f"/{cleaned}/" or cleaned.endswith("/.git/hooks")
 
 
 def classify_path_literal(raw_token: str) -> PathLabel:
@@ -148,7 +198,7 @@ def classify_path_literal(raw_token: str) -> PathLabel:
 
 _FETCH_PIPE_SHELL_RE = re.compile(
     r"\b(?:curl|wget)\b[^|#\n]*\|\s*(?:sudo\s+)?(?:env\s+\S+=\S+\s+)?"
-    r"(?:sh|bash|zsh|dash|ksh|mksh)\b"
+    r"(?:sh|bash|zsh|dash|ksh|mksh|python3?|node|perl|ruby)\b"
 )
 _B64_PIPE_SHELL_RE = re.compile(
     r"\bbase64\s+(?:-{1,2}[dD]\b|--decode\b)[^|#\n]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash)\b"
@@ -175,12 +225,53 @@ _SYSTEMD_USER_TIMER_RE = re.compile(r"\bsystemctl\s+--user\s+enable\b")
 _HERMES_CRON_ADD_RE = re.compile(r"\bhermes\s+cron\s+add\b")
 _HEREDOC_START_RE = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
 
+#: LNS-SHL-008 staged download-then-execute (no pipe): the download half.
+#: ``curl -o FILE`` / ``curl -O`` (remote-name form) / ``wget -O FILE`` /
+#: ``wget`` (remote-name form) / any curl|wget line redirecting to a file.
+_STAGED_CURL_OUTPUT_RE = re.compile(r"\bcurl\b[^#\n]*?(?:-o\s*(\S+)|--output\s*(\S+)|\s-O\b)")
+_STAGED_WGET_OUTPUT_RE = re.compile(r"\bwget\b[^#\n]*?(?:-O\s*(\S+)|--output-document=(\S+))")
+_STAGED_REDIRECT_RE = re.compile(
+    r"\b(?:curl|wget)\b[^#\n]*?>{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s;&|<>]+)"
+)
+#: The execute half: interpreter runs, ./-prefixed or bare runs, sourcing.
+_STAGED_INTERP_RUN_RE = re.compile(
+    r"(?:^|[;&|]\s*|\s)(?:sh|bash|zsh|dash|ksh|python3?|node|perl|ruby)\s+"
+    r"(\"[^\"]*\"|'[^']*'|[^\s;&|]+)"
+)
+_STAGED_DOT_RUN_RE = re.compile(
+    r"(?:^|[;&|]\s*)(?:\./|source\s+|\.\s+)(\"[^\"]*\"|'[^']*'|[^\s;&|]+)"
+)
+#: LNS-SHL-009 cross-platform dropper vocabulary (single-line shapes).
+_DROPPER_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("win-dropper:iwr-iex", re.compile(r"(?i)\biwr\b[^|#\n]*\|\s*iex\b")),
+    (
+        "win-dropper:invoke-webrequest-iex",
+        re.compile(r"(?i)invoke-webrequest\b[^|#\n]*\|\s*invoke-expression\b"),
+    ),
+    ("win-persist:schtasks", re.compile(r"(?i)\bschtasks\b[^#\n]*/create\b")),
+    ("win-persist:run-key", re.compile(r"(?i)\breg\s+add\b[^#\n]*\\run\b")),
+    (
+        "mac-persist:launchctl",
+        re.compile(r"\blaunchctl\b\s+(?:load|bootstrap|submit)\b"),
+    ),
+    ("mac-exec:osascript", re.compile(r"\bosascript\b[^#\n]*\s-e\b")),
+)
+
 #: Credential/network payload markers inside written content (SHL-005).
 _PAYLOAD_MARKER_RE = re.compile(
     r"(?i)\b(curl|wget|https?://|token|secret|password|credential|key|send|upload|post)\b"
 )
-#: Control-plane escalation shapes (SHL-006): platform_disabled lists or a
-#: security tool disabled by name — no benign authoring story (§17 H5).
+#: ``git config`` planting an Authorization-bearing header: every future
+#: fetch/clone through the configured URL carries the planted credential to
+#: an attacker endpoint (SHL-006 invocation branch — no file sink involved).
+#: Command-position anchored: ``git`` must open the command (line start,
+#: separator, quote, or ``$(``) so pattern DEFINITIONS and prose mentions
+#: never match — only real invocations (the self-scan law: the instrument's
+#: own detector source must stay silent).
+_GIT_EXTRAHEADER_RE = re.compile(
+    r"(?:^|[;&|]\s*|[\"'`({$]\s*)(?:sudo\s+)?git\s+config\b[^#\n]*"
+    r"\bhttp\.extraheader\b"
+)
 _PLATFORM_DISABLED_RE = re.compile(r"(?i)platform_disabled|(?:skills_guard|lens)\s*:\s*false")
 
 _REDIRECT_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s;&|<>]+)")
@@ -385,9 +476,11 @@ class ShellScanEngine:
                 _cron_persistence_findings(self._rules, record.path, lines, sinks, blocks, claimed)
             )
             findings.extend(
-                _control_plane_findings(self._rules, record.path, sinks, blocks, claimed)
+                _control_plane_findings(self._rules, record.path, lines, sinks, blocks, claimed)
             )
             findings.extend(_env_source_findings(self._rules, record.path, lines, claimed))
+            findings.extend(_staged_exec_findings(self._rules, record.path, lines, claimed))
+            findings.extend(_dropper_vocab_findings(self._rules, record.path, lines, claimed))
         findings.sort(key=_finding_sort_key)
         return findings
 
@@ -461,9 +554,20 @@ def _pipe_fetch_findings(
             continue
         fragment = match.group(0)
         interp = next(
-            name
-            for name in ("bash", "zsh", "dash", "mksh", "ksh", "sh")
-            if re.search(rf"\b{name}\b", fragment)
+            canonical
+            for canonical, aliases in (
+                ("bash", ("bash",)),
+                ("zsh", ("zsh",)),
+                ("dash", ("dash",)),
+                ("mksh", ("mksh",)),
+                ("ksh", ("ksh",)),
+                ("python3", ("python3", "python")),
+                ("node", ("node",)),
+                ("perl", ("perl",)),
+                ("ruby", ("ruby",)),
+                ("sh", ("sh",)),
+            )
+            if any(re.search(rf"\b{alias}\b", fragment) for alias in aliases)
         )
         out.append(
             _build(
@@ -518,7 +622,8 @@ def _obfuscated_exec_findings(
                 line.strip(),
                 kind,
                 f"Obfuscated execution chain ({kind}) hides the executed payload "
-                "from review; decoded content still gets scanned as data.",
+                "from review; decode the matched bytes by hand — no decode "
+                "ladder runs over them yet.",
                 declared=declared,
                 extra_tags=extra_tags,
                 confidence=None,
@@ -576,9 +681,36 @@ def _persona_write_findings(
         kind = _persona_kind(label)
         if kind is None:
             continue
-        evidence = (
-            f"persona-write:{kind}:{label.basename}" if label.basename else f"persona-write:{kind}"
-        )
+        if kind in ("shell-rc", "authorized-keys"):
+            evidence = f"persistence-write:{kind}:{label.basename}".rstrip(":")
+            if kind == "shell-rc":
+                message = (
+                    "Script writes a shell-startup file ("
+                    + (label.agent_sub or label.basename)
+                    + ") — sourced by every interactive shell, so this is "
+                    "durable code execution one terminal open away."
+                )
+            else:
+                message = (
+                    "Script writes ssh authorized_keys ("
+                    + (label.agent_sub or label.basename)
+                    + ") — an appended key is permanent remote entry."
+                )
+            confidence: float | None = (
+                REDUCED_CONFIDENCE_PERSONA if label.label == "unknown-var" else None
+            )
+        else:
+            evidence = (
+                f"persona-write:{kind}:{label.basename}"
+                if label.basename
+                else f"persona-write:{kind}"
+            )
+            message = (
+                "Script writes into agent persona/memory state ("
+                + (label.agent_sub or label.basename)
+                + ") — prompt-injected every boot and durable past skill removal."
+            )
+            confidence = REDUCED_CONFIDENCE_PERSONA if kind == "unknown-path" else None
         out.append(
             _build(
                 rule,
@@ -586,12 +718,10 @@ def _persona_write_findings(
                 site.lineno,
                 f">> {_clean_token(site.raw_target)}",
                 evidence,
-                "Script writes into agent persona/memory state ("
-                + (label.agent_sub or label.basename)
-                + ") — prompt-injected every boot and durable past skill removal.",
+                message,
                 declared=declared,
                 extra_tags=extra_tags,
-                confidence=(REDUCED_CONFIDENCE_PERSONA if kind == "unknown-path" else None),
+                confidence=confidence,
                 effective_severity=None,
             )
         )
@@ -674,6 +804,7 @@ def _cron_persistence_findings(
 def _control_plane_findings(
     rules: dict[str, Rule],
     rel_path: str,
+    lines: list[str],
     sinks: list[SinkSite],
     blocks: list[tuple[int, HeredocBlock]],
     claimed: list[str],
@@ -687,16 +818,32 @@ def _control_plane_findings(
     for site in sinks:
         label = classify_path_literal(site.raw_target)
         trigger: str | None = None
+        detail = label.agent_sub
         if label.is_agent_home and label.agent_sub.endswith("config.yaml"):
             trigger = "config-write"
         elif label.is_agent_home and (
             label.agent_sub.endswith(_GATEWAY_BASENAMES) or label.agent_sub.startswith("pairing/")
         ):
             trigger = "gateway-state-write"
+        elif _is_git_hooks_path(site.raw_target):
+            # Any label: a hook planted anywhere a git repo will execute it.
+            trigger = "git-hooks-write"
+            detail = _clean_token(site.raw_target)
         if trigger is None:
             continue
         body_text = "\n".join(bodies.get(site.raw_target, ()))
         escalated = bool(_PLATFORM_DISABLED_RE.search(body_text))
+        if trigger == "git-hooks-write":
+            message = (
+                f"Script plants a git hook ({detail}) — hook scripts execute "
+                "on future git operations with the operator's privileges."
+            )
+        else:
+            message = (
+                "Script writes agent configuration/platform state ("
+                f"{label.agent_sub}) — the knobs gating permissions, platforms, "
+                "and plugin visibility."
+            )
         out.append(
             _build(
                 rule,
@@ -704,13 +851,32 @@ def _control_plane_findings(
                 site.lineno,
                 f">> {_clean_token(site.raw_target)}",
                 trigger,
-                "Script writes agent configuration/platform state ("
-                f"{label.agent_sub}) — the knobs gating permissions, platforms, "
-                "and plugin visibility.",
+                message,
                 declared=declared,
                 extra_tags=extra_tags + (("escalated-critical",) if escalated else ()),
                 confidence=None,
                 effective_severity="CRITICAL" if escalated else None,
+            )
+        )
+    for lineno, line in enumerate(lines, start=1):
+        if "git" not in line or "extraheader" not in line:
+            continue  # necessary-condition gate: _GIT_EXTRAHEADER_RE needs both
+        if _GIT_EXTRAHEADER_RE.search(line) is None:
+            continue
+        out.append(
+            _build(
+                rule,
+                rel_path,
+                lineno,
+                line.strip(),
+                "git-config-extraheader",
+                "Script plants an Authorization-bearing git http.extraheader — "
+                "every future fetch/clone through the configured URL carries "
+                "the planted credential outward.",
+                declared=declared,
+                extra_tags=extra_tags,
+                confidence=None,
+                effective_severity=None,
             )
         )
     return out
@@ -861,11 +1027,212 @@ def _env_source_findings(
     return out
 
 
+#: Device/null-ish redirect targets: never download events (SHL-008).
+_STAGED_NULL_TARGETS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
+
+_URL_BASENAME_RE = re.compile(r"https?://[^\s\"'<>|`]+?")
+
+
+def _staged_download_basename(line: str) -> str | None:
+    """Outfile basename when *line* downloads via curl/wget, else None.
+
+    Covers ``-o``/``--output``/``-O`` (curl), ``-O``/``--output-document=``
+    (wget), and ``curl|wget ... > FILE`` redirects. ``-O``/bare-``wget``
+    forms resolve the remote name from the URL basename; ``/dev/*`` targets
+    and unresolvable names yield None (never download events).
+    """
+    match = _STAGED_CURL_OUTPUT_RE.search(line)
+    if match is not None:
+        outfile = match.group(1) or match.group(2)
+        if outfile is not None:
+            return _download_key(outfile)
+        return _remote_name_basename(line)  # bare -O: remote-name form
+    match = _STAGED_WGET_OUTPUT_RE.search(line)
+    if match is not None:
+        outfile = match.group(1) or match.group(2)
+        if outfile is not None:
+            return _download_key(outfile)
+    elif re.search(r"\bwget\b", line) is not None:
+        remote = _remote_name_basename(line)
+        if remote is not None:
+            return remote
+    match = _STAGED_REDIRECT_RE.search(line)
+    if match is not None:
+        return _download_key(match.group(1))
+    return None
+
+
+def _download_key(raw_target: str) -> str | None:
+    """Normalized download basename, or None for null-device targets."""
+    token = _clean_token(raw_target)
+    if not token or token in _STAGED_NULL_TARGETS or token.startswith("/dev/"):
+        return None
+    base = re.split(r"[\\/]", token)[-1]
+    return base or None
+
+
+def _remote_name_basename(line: str) -> str | None:
+    """URL-path basename for ``-O``/bare-wget remote-name downloads."""
+    match = _URL_BASENAME_RE.search(line)
+    if match is None:
+        return None
+    path = match.group(0).split("://", 1)[1]
+    tail = path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    return tail or None
+
+
+def _staged_exec_findings(
+    rules: dict[str, Rule], rel_path: str, lines: list[str], claimed: list[str]
+) -> list[Finding]:
+    rule = _rule_of(rules, "LNS-SHL-008")
+    if rule is None:
+        return []
+    if not any("curl" in line or "wget" in line for line in lines):
+        return []  # necessary-condition gate: downloads need curl|wget
+    declared, extra_tags = _declared_flag(rule, claimed)
+    shell_file = rel_path.endswith(".sh")
+    region: frozenset[int] | None = None if shell_file else _shell_regions(lines)
+
+    def _in_region(lineno: int) -> bool:
+        return region is None or lineno in region
+
+    downloads: list[tuple[int, str]] = []  # (lineno, basename), line-ordered
+    for lineno, line in enumerate(lines, start=1):
+        if "curl" not in line and "wget" not in line:
+            continue
+        if not _in_region(lineno):
+            continue
+        base = _staged_download_basename(line)
+        if base is not None and all(known != base for _, known in downloads):
+            downloads.append((lineno, base))
+    if not downloads:
+        return []
+    out: list[Finding] = []
+    for down_lineno, base in downloads:
+        # The executed basename must EQUAL the downloaded one: tarball-in /
+        # different-file-out installers (pinned-tarball-installer) stay silent.
+        run_re = re.compile(rf"(?:^|[;&|]\s*)(?:\./)?{re.escape(base)}(?:\s|[;&|$])")
+        for lineno, line in enumerate(lines, start=1):
+            if lineno <= down_lineno or not _in_region(lineno):
+                continue
+            paired = False
+            for match in _STAGED_INTERP_RUN_RE.finditer(line):
+                candidate = re.split(r"[\\/]", _clean_token(match.group(1)))[-1]
+                if candidate == base:
+                    paired = True
+                    break
+            if not paired:
+                for match in _STAGED_DOT_RUN_RE.finditer(line):
+                    candidate = re.split(r"[\\/]", _clean_token(match.group(1)))[-1]
+                    if candidate == base:
+                        paired = True
+                        break
+            if not paired and run_re.search(line) is not None:
+                paired = True
+            if paired:
+                out.append(
+                    _build(
+                        rule,
+                        rel_path,
+                        lineno,
+                        line.strip(),
+                        f"staged-exec:{base}",
+                        f"File '{base}' fetched from the network is executed "
+                        "later in this file — staged download-then-execute "
+                        "without a pipe; whatever the endpoint served runs "
+                        "at run time.",
+                        declared=declared,
+                        extra_tags=extra_tags,
+                        confidence=None,
+                        effective_severity=None,
+                    )
+                )
+                break  # first execution wins per downloaded basename
+    return out
+
+
+_DROPPER_MESSAGES: dict[str, str] = {
+    "win-dropper:iwr-iex": (
+        "PowerShell download-crandle (iwr piped to iex) fetches and executes "
+        "remote code in one line."
+    ),
+    "win-dropper:invoke-webrequest-iex": (
+        "PowerShell download-crandle (Invoke-WebRequest piped to "
+        "Invoke-Expression) fetches and executes remote code in one line."
+    ),
+    "win-persist:schtasks": (
+        "Windows scheduled-task creation (schtasks /create) installs recurring "
+        "execution outside any agent scheduler."
+    ),
+    "win-persist:run-key": ("Windows Run-key write (reg add ...\\Run) re-executes at every logon."),
+    "mac-persist:launchctl": (
+        "macOS launchd job install (launchctl load/bootstrap/submit) persists "
+        "execution past reboots."
+    ),
+    "mac-exec:osascript": ("macOS script execution (osascript -e) runs code outside shell review."),
+}
+
+_DROPPER_GATE_LITERALS = ("iwr", "schtasks", "reg", "launchctl", "osascript", "invoke-")
+
+
+def _dropper_vocab_findings(
+    rules: dict[str, Rule], rel_path: str, lines: list[str], claimed: list[str]
+) -> list[Finding]:
+    rule = _rule_of(rules, "LNS-SHL-009")
+    if rule is None:
+        return []
+    declared, extra_tags = _declared_flag(rule, claimed)
+    out: list[Finding] = []
+    for lineno, line in enumerate(lines, start=1):
+        lowered = line.casefold()
+        if not any(literal in lowered for literal in _DROPPER_GATE_LITERALS):
+            continue  # necessary-condition gate: no dropper regex can match
+        for evidence, regex in _DROPPER_RES:
+            if regex.search(line) is None:
+                continue
+            out.append(
+                _build(
+                    rule,
+                    rel_path,
+                    lineno,
+                    line.strip(),
+                    evidence,
+                    _DROPPER_MESSAGES[evidence],
+                    declared=declared,
+                    extra_tags=extra_tags,
+                    confidence=None,
+                    effective_severity=None,
+                )
+            )
+    return out
+
+
 def _persona_kind(label: PathLabel) -> str | None:
-    """Persona/memory classification for an agent_home or unknown-var sink."""
+    """Persona/memory/persistence classification for a write sink label.
+
+    Returns the kind token: ``self-state`` / ``memory`` / ``home-md`` /
+    ``unknown-path`` (persona family, existing contract) or the widened
+    persistence family: ``shell-rc`` (shell-startup files — durable code
+    execution one terminal open away) and ``authorized-keys`` (appended SSH
+    keys are permanent remote entry). ``outside``-labeled rc/authorized_keys
+    targets fire too ($HOME rc files are the canonical location); only
+    ``inside_skill_root`` stays silent (a skill's own dotfiles).
+    """
     if label.label == "unknown-var":
-        return "unknown-path" if label.basename in PERSONA_BASENAMES else None
-    sub = label.agent_sub
+        if label.basename in PERSONA_BASENAMES:
+            return "unknown-path"
+        if label.basename in PERSISTENCE_RC_BASENAMES:
+            return "shell-rc"
+        if label.basename == AUTHORIZED_KEYS_BASENAME:
+            return "authorized-keys"
+        return None
+    sub = label.agent_sub if label.is_agent_home else ""
+    basename = label.basename
+    if label.label == "outside" or label.is_agent_home:
+        if basename in PERSISTENCE_RC_BASENAMES:
+            return "shell-rc"
+        if basename == AUTHORIZED_KEYS_BASENAME:
+            return "authorized-keys"
     if not sub:
         return None
     if sub.startswith("memories/"):
@@ -893,10 +1260,13 @@ def _finding_sort_key(finding: Finding) -> tuple[str, str, int]:
 
 
 __all__ = [
+    "AUTHORIZED_KEYS_BASENAME",
     "ENGINE_NAME",
+    "PERSISTENCE_RC_BASENAMES",
     "PERSONA_BASENAMES",
     "RULE_IDS",
     "PathLabel",
     "ShellScanEngine",
+    "_is_git_hooks_path",
     "classify_path_literal",
 ]

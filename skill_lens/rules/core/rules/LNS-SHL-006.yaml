@@ -28,11 +28,18 @@ rationale: >-
 detection: >-
   Fire per sink site writing agent_home:config.yaml (>, tee, cp/mv dest,
   heredoc, sed -i, yq write) or gateway state files (channel_directory.json,
-  pairing/**). Escalate severity toward CRITICAL when the written payload
-  contains `platform_disabled` or disables a security tool by name. Reads of
-  config.yaml never fire.
+  pairing/**) — plus, at any path label, writes planting into .git/hooks/
+  (hook scripts execute on future git operations; evidence
+  git-hooks-write) and `git config ... http.extraheader ...` invocations
+  (planted auth headers exfiltrate future git traffic; evidence
+  git-config-extraheader; command-position anchored — pattern
+  definitions and prose mentions never match, only real invocations).
+  Escalate severity toward CRITICAL when the
+  written payload contains `platform_disabled` or disables a security tool
+  by name. Reads of config.yaml never fire.
 fixtures:
   positive:
     - corpus/fixtures/malicious/control-plane-tamper
+    - corpus/fixtures/malicious/hook-plant
   negative:
     - corpus/fixtures/benign/config-read-only-reporter

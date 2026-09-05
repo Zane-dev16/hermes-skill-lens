@@ -24,6 +24,10 @@ heuristic; --osv closes opt-in"):
   demonstrated execution surface, hence ``static_only=false``. The engine
   raises confidence when the script body matches download-and-execute
   shapes (D-036 explicitly deferred package.json hooks here).
+- **LNS-DEP-004** pyproject ``[build-system]`` hooks: a ``build-backend``
+  outside the bundled allowlist, or any ``backend-path`` entry (a local
+  directory placed on sys.path at build time) — PEP 517 backends execute
+  with the installer's privileges, the PyPI half of DEP-003's npm lane.
 
 NETWORK LAW: this engine is pure static analysis and NEVER touches the
 network. OSV.dev enrichment lives in :mod:`skill_lens.enrich.osv`, which is
@@ -66,7 +70,7 @@ ENGINE_NAME = "depintel"
 
 #: Rules implemented here — pack rules bound to ``depintel`` but missing
 #: from this tuple surface as LNS-ENG-001 diagnostics (never silence).
-RULE_IDS: tuple[str, ...] = ("LNS-DEP-001", "LNS-DEP-002", "LNS-DEP-003")
+RULE_IDS: tuple[str, ...] = ("LNS-DEP-001", "LNS-DEP-002", "LNS-DEP-003", "LNS-DEP-004")
 
 #: Snippet/message sanitization clip (mirrors sibling engines' evidence caps).
 _SNIPPET_MAX = 160
@@ -221,6 +225,18 @@ _VCS_PREFIXES = ("git+", "http://", "https://", "svn+", "bzr+")
 
 _LIFECYCLE_KEYS: tuple[str, ...] = ("preinstall", "install", "postinstall")
 
+#: LNS-DEP-004 allowlisted PEP 517 build backends (exact match). Anything
+#: else named as ``build-backend`` is unfamiliar install-time code; the
+#: list is DATA — extend here, never in rule files.
+BUILD_BACKEND_ALLOWLIST: tuple[str, ...] = (
+    "flit_core.buildapi",
+    "hatchling.build",
+    "pdm.backend",
+    "poetry.core.masonry.api",
+    "setuptools.build_meta",
+    "setuptools.build_meta:__legacy__",
+)
+
 
 def _pip_unpinned(spec_text: str) -> bool:
     """PEP 508 spec unpinned iff the post-name remainder names NO version.
@@ -332,6 +348,63 @@ def _poetry_or_pip_unpinned(name: str, spec: str) -> bool:
     if remainder.startswith(("^", "~=", "~")):
         return False  # caret/tilde ranges anchor a concrete base version
     return not any(ch.isdigit() for ch in remainder)
+
+
+@dataclass(frozen=True)
+class BuildHook:
+    """One pyproject [build-system] hook declaration (install-time exec)."""
+
+    kind: str  # "build-backend" | "backend-path"
+    value: str  # backend object path or backend-path directory
+    source_path: str
+    line: int | None
+
+
+def parse_pyproject_build_system(text: str, source_path: str) -> list[BuildHook]:
+    """pyproject.toml [build-system] -> BuildHooks (non-allowlisted only).
+
+    tomllib loses positions, so lines re-resolve by searching for the
+    verbatim value text (first occurrence wins — deterministic). Unparsable
+    TOML yields nothing here; ingest already owns the parse diagnostic.
+    Allowlisted backends and absent [build-system] tables stay silent.
+    """
+    try:
+        data = tomllib.loads(text)
+    except (tomllib.TOMLDecodeError, UnicodeError):
+        return []
+    build = data.get("build-system")
+    if not isinstance(build, dict):
+        return []
+    lines = text.splitlines()
+    hooks: list[BuildHook] = []
+    backend = build.get("build-backend")
+    if isinstance(backend, str) and backend.strip():
+        name = backend.strip()
+        if name not in BUILD_BACKEND_ALLOWLIST:
+            hooks.append(
+                BuildHook(
+                    kind="build-backend",
+                    value=name,
+                    source_path=source_path,
+                    line=_find_line(lines, name),
+                )
+            )
+    backend_path = build.get("backend-path")
+    entries: list[str] = []
+    if isinstance(backend_path, str) and backend_path.strip():
+        entries.append(backend_path.strip())
+    elif isinstance(backend_path, list):
+        entries.extend(sorted({str(item).strip() for item in backend_path if str(item).strip()}))
+    for entry in entries:
+        hooks.append(
+            BuildHook(
+                kind="backend-path",
+                value=entry,
+                source_path=source_path,
+                line=_find_line(lines, entry),
+            )
+        )
+    return hooks
 
 
 def parse_package_json_text(text: str, source_path: str) -> tuple[list[DepRef], list[ScriptHook]]:
@@ -523,17 +596,21 @@ class DepIntelEngine:
         dep001 = self._rules.get("LNS-DEP-001")
         dep002 = self._rules.get("LNS-DEP-002")
         dep003 = self._rules.get("LNS-DEP-003")
+        dep004 = self._rules.get("LNS-DEP-004")
         findings: list[Finding] = []
         for record, text in iter_text_files(bundle_ir, ctx):
             basename = record.path.rsplit("/", 1)[-1]
             if fnmatch(basename, "requirements*.txt"):
                 refs = parse_requirements_text(text, record.path)
                 hooks: list[ScriptHook] = []
+                build_hooks: list[BuildHook] = []
             elif basename == "pyproject.toml":
                 refs = parse_pyproject_text(text, record.path)
                 hooks = []
+                build_hooks = parse_pyproject_build_system(text, record.path)
             elif basename == "package.json":
                 refs, hooks = parse_package_json_text(text, record.path)
+                build_hooks = []
             else:
                 continue
             if dep001 is not None:
@@ -542,6 +619,8 @@ class DepIntelEngine:
                 findings.extend(self._typosquat_findings(dep002, refs))
             if dep003 is not None:
                 findings.extend(self._lifecycle_findings(dep003, hooks))
+            if dep004 is not None:
+                findings.extend(self._build_backend_findings(dep004, build_hooks))
         findings.sort(key=finding_sort_key)
         return findings
 
@@ -695,6 +774,63 @@ class DepIntelEngine:
             )
         return findings
 
+    # -- LNS-DEP-004 ----------------------------------------------------------
+
+    def _build_backend_findings(self, rule: Rule, hooks: list[BuildHook]) -> list[Finding]:
+        findings: list[Finding] = []
+        for hook in hooks:
+            normalized = " ".join(hook.value.split()).casefold()[:96]
+            if hook.kind == "build-backend":
+                evidence = f"build-backend:{normalized}"
+                message = (
+                    f"pyproject build-backend '{hook.value}' is outside the "
+                    "allowlisted set — unfamiliar code executes at install time"
+                )
+                detail: dict[str, str] = {
+                    "ecosystem": "pypi",
+                    "package": hook.value.casefold(),
+                    "build_backend": hook.value,
+                }
+            else:
+                evidence = f"backend-path:{normalized}"
+                message = (
+                    f"pyproject backend-path '{hook.value}' places a local "
+                    "directory on sys.path at build time — vendored code "
+                    "executes at install time"
+                )
+                detail = {
+                    "ecosystem": "pypi",
+                    "package": "",
+                    "backend_path": hook.value,
+                }
+            findings.append(
+                Finding(
+                    fingerprint=finding_fingerprint(rule.id, rule.capability, evidence),
+                    rule_id=rule.id,
+                    rule_version=rule.rule_version,
+                    engine=rule.engine,
+                    title=rule.title,
+                    capability=rule.capability,
+                    severity=rule.severity,
+                    effective_severity=rule.severity,
+                    confidence=rule.confidence_default,
+                    evidence_kind=rule.evidence_kind,
+                    static_only=rule.static_only,
+                    location=Location(
+                        path=hook.source_path,
+                        start_line=hook.line,
+                        end_line=hook.line,
+                        snippet=safe_text(f"{hook.kind} = {hook.value!r}")[:_SNIPPET_MAX],
+                        redacted=False,
+                    ),
+                    message=message,
+                    remediation=rule.remediation,
+                    tags=tuple(rule.tags) + (f"hook:{hook.kind}",),
+                    detail=(detail,),
+                )
+            )
+        return findings
+
     @staticmethod
     def _location(path: str, line: int | None, rule: Rule) -> Location:
         return Location(
@@ -707,15 +843,18 @@ class DepIntelEngine:
 
 
 __all__ = [
+    "BUILD_BACKEND_ALLOWLIST",
     "ENGINE_NAME",
     "NPM_TOP_PACKAGES",
     "PYPI_TOP_PACKAGES",
     "RULE_IDS",
+    "BuildHook",
     "DepIntelEngine",
     "DepRef",
     "ScriptHook",
     "nearest_known_names",
     "parse_package_json_text",
+    "parse_pyproject_build_system",
     "parse_pyproject_text",
     "parse_requirements_text",
     "typosquat_verdict",

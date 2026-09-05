@@ -40,6 +40,11 @@ Rule map (ids owned here):
 - **LNS-PYS-008** recursive/delete sinks aimed outside the skill root
   (``shutil.rmtree``/``os.remove`` family; R11), unknown-variable targets at
   the §4 reduced confidence.
+- **LNS-PYS-009** staged download-then-execute: ``urlretrieve`` (or an
+  equivalent download call) fetching a URL into a path that a later
+  ``subprocess``/``os.system``/``os.exec*`` sink executes (same literal
+  path, ordered same-file bar — the audit-named urlretrieve→subprocess
+  shape SHL-008's E4 sibling).
 
 DETERMINISM LAW: evidence tokens carry shapes and basenames only — no line
 numbers, no absolute paths, no wall-clock. Both modes emit the SAME
@@ -54,7 +59,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..claims import finding_fingerprint, is_declared
-from ..ir import SkillIR
+from ..ir import PATH_LABEL_INSIDE_SKILL_ROOT, SkillIR
 from ..parsing import GATEWAY, ParserGateway, line_tokens
 from .base import (
     Finding,
@@ -65,7 +70,10 @@ from .base import (
 )
 from .e3_shellscan import (
     _PLATFORM_DISABLED_RE,
+    AUTHORIZED_KEYS_BASENAME,
+    PERSISTENCE_RC_BASENAMES,
     PERSONA_BASENAMES,
+    _is_git_hooks_path,
     _persona_kind,
     classify_path_literal,
 )
@@ -87,6 +95,7 @@ RULE_IDS: tuple[str, ...] = (
     "LNS-PYS-006",
     "LNS-PYS-007",
     "LNS-PYS-008",
+    "LNS-PYS-009",
 )
 
 #: Degraded-mode confidence ceiling: top of the §7 regex band so fallback
@@ -117,6 +126,28 @@ SHELL_DIRECT_SINKS = frozenset(
     }
 )
 _SUBPROCESS_TAILS = frozenset({"run", "call", "check_call", "check_output", "popen"})
+#: LNS-PYS-009 staged download-then-execute: download-side callee tails.
+_STAGED_DOWNLOAD_TAILS = frozenset({"urlretrieve"})
+#: Execution-side tails for the staged pair (subprocess family, os.system /
+#: popen, the os.exec* replacement family, os.startfile).
+_STAGED_EXEC_TAILS = frozenset(
+    {
+        "run",
+        "call",
+        "check_call",
+        "check_output",
+        "popen",
+        "system",
+        "execv",
+        "execve",
+        "execl",
+        "execle",
+        "execlp",
+        "execvp",
+        "execvpe",
+        "startfile",
+    }
+)
 _DECODE_SUFFIXES = ("b64decode", "decodebytes", "decodestring", "a2b_base64")
 _DECODE_EXACT = frozenset({"zlib.decompress", "codecs.decode", "lzma.decompress"})
 _ENV_READ_CALLS = frozenset({"os.environ.get", "os.getenv"})
@@ -176,12 +207,18 @@ def _route_agent_home_sub(sub: str, basename: str) -> tuple[str | None, str]:
     """Map one ``agent_home:<sub>`` write to (rule_id, evidence token)."""
     if sub.endswith(_CRON_SUFFIX):
         return "LNS-PYS-006", "cron-json-write"
+    if _is_git_hooks_path(sub):
+        return "LNS-PYS-007", f"git-hooks-write:{basename}".rstrip(":")
     if sub.startswith(_SKILL_TREE_PREFIX):
         return "LNS-PYS-007", f"skill-tree-write:{basename}".rstrip(":")
     if any(sub == b or sub.endswith(b) for b in _CONFIG_BASENAMES):
         return "LNS-PYS-007", f"config-write:{basename}"
     if sub.startswith("pairing/"):
         return "LNS-PYS-007", f"gateway-state-write:{basename}".rstrip(":")
+    if basename in PERSISTENCE_RC_BASENAMES:
+        return "LNS-PYS-005", f"hstate-write:shell-rc:{basename}".rstrip(":")
+    if basename == AUTHORIZED_KEYS_BASENAME:
+        return "LNS-PYS-005", f"hstate-write:authorized-keys:{basename}".rstrip(":")
     kind = _persona_kind(classify_path_literal(f"${{HERMES_HOME}}/{sub}"))
     if kind is not None:
         return "LNS-PYS-005", f"hstate-write:{kind}:{basename}".rstrip(":")
@@ -196,6 +233,22 @@ def _reduced_basename_route(basename: str) -> _StateHit | None:
             f"hstate-write:unknown-path:{basename}",
             REDUCED_CONFIDENCE_STATE,
             f"unresolvable target adjacent to '{basename}'",
+            basename,
+        )
+    if basename in PERSISTENCE_RC_BASENAMES:
+        return _StateHit(
+            "LNS-PYS-005",
+            f"hstate-write:shell-rc:{basename}",
+            REDUCED_CONFIDENCE_STATE,
+            f"unresolvable shell-startup target '{basename}'",
+            basename,
+        )
+    if basename == AUTHORIZED_KEYS_BASENAME:
+        return _StateHit(
+            "LNS-PYS-005",
+            f"hstate-write:authorized-keys:{basename}",
+            REDUCED_CONFIDENCE_STATE,
+            "unresolvable ssh access-persistence target",
             basename,
         )
     if basename == "jobs.json":
@@ -221,9 +274,13 @@ def _route_candidates(candidates: list[str], *, env_marked: bool) -> list[_State
     """Classify extracted write-target literals into state-write hits.
 
     Mirrors the §4 conservative treatment: resolvable ``agent_home:`` labels
-    fire at full strength; unresolvable forms adjacent to known persona/cron/
-    config basenames fire at reduced confidence — and only when an env/
-    expansion marker co-occurs, so ordinary relative paths stay silent.
+    fire at full strength; ``outside``-labeled shell-rc/authorized_keys
+    basenames fire at full strength too ($HOME is their canonical home,
+    mirroring E3 SHL-004); any-label ``.git/hooks/`` writes fire as hook
+    planting (inside-skill-root relatives stay silent); unresolvable forms
+    adjacent to known persona/cron/config basenames fire at reduced
+    confidence — and only when an env/expansion marker co-occurs, so
+    ordinary relative paths stay silent.
     """
     hits: list[_StateHit] = []
     seen: set[tuple[str, str]] = set()
@@ -237,6 +294,40 @@ def _route_candidates(candidates: list[str], *, env_marked: bool) -> list[_State
             rule_id, evidence = _route_agent_home_sub(label.agent_sub, label.basename)
             if rule_id is not None:
                 hit = _StateHit(rule_id, evidence, None, label.agent_sub, token)
+        elif _is_git_hooks_path(token):
+            # Any-label hook planting: the segment check is label-agnostic
+            # (~/proj/.git/hooks/x classifies "outside" but is still a
+            # planted hook). Inside-skill-root relatives stay silent — a
+            # skill's own checkout hooks are its own business.
+            if label.label != PATH_LABEL_INSIDE_SKILL_ROOT:
+                hit = _StateHit(
+                    "LNS-PYS-007",
+                    f"git-hooks-write:{label.basename}".rstrip(":"),
+                    None,
+                    token,
+                    token,
+                )
+        elif label.label == "outside" and (
+            label.basename in PERSISTENCE_RC_BASENAMES or label.basename == AUTHORIZED_KEYS_BASENAME
+        ):
+            # Crisp basenames at outside labels ($HOME rc files are the
+            # canonical location) — full strength, mirroring E3 SHL-004.
+            if label.basename in PERSISTENCE_RC_BASENAMES:
+                hit = _StateHit(
+                    "LNS-PYS-005",
+                    f"hstate-write:shell-rc:{label.basename}",
+                    None,
+                    token,
+                    token,
+                )
+            else:
+                hit = _StateHit(
+                    "LNS-PYS-005",
+                    f"hstate-write:authorized-keys:{label.basename}",
+                    None,
+                    token,
+                    token,
+                )
         elif env_marked:
             hit = _reduced_basename_route(label.basename)
         key = (hit.rule_id, hit.evidence) if hit else ("", "")
@@ -863,6 +954,85 @@ def _sink_short(resolved: str | None) -> str:
     return name or "unknown"
 
 
+def _staged_download_targets(
+    calls: list[Any], resolver: _Resolver, flow: _Flow, source: bytes
+) -> list[tuple[int, str]]:
+    """``(lineno, target_literal)`` for ``urlretrieve(url, path)`` calls.
+
+    Targets resolve through same-file assignments (``_target_candidates``)
+    so ``OUT = "/tmp/x.sh"; urlretrieve(URL, OUT)`` still pairs. Sorted
+    and deduped for determinism.
+    """
+    out: list[tuple[int, str]] = []
+    for call_node in calls:
+        lowered = (resolver.callee(call_node) or "").lower()
+        if _tail(lowered) not in _STAGED_DOWNLOAD_TAILS:
+            continue
+        positional = _positional_args(call_node, source)
+        if len(positional) < 2:
+            continue
+        lineno = call_node.start_point[0] + 1
+        for target in _target_candidates([positional[1]], resolver, flow):
+            key = (lineno, target)
+            if key not in out:
+                out.append(key)
+    return sorted(out)
+
+
+def _staged_exec_kind(resolver: _Resolver, call_node: Any, source: bytes) -> str | None:
+    """Execution-sink short for staged-pair purposes, or None."""
+    lowered = (resolver.callee(call_node) or "").lower()
+    tail = _tail(lowered)
+    if tail not in _STAGED_EXEC_TAILS:
+        return None
+    if lowered.startswith("subprocess.") or lowered in ("os.system", "os.popen"):
+        return tail
+    if lowered.startswith("os."):
+        return tail
+    return None
+
+
+def _staged_argv_targets(
+    args: list[Any], resolver: _Resolver, flow: _Flow, source: bytes
+) -> set[str]:
+    """Literal paths reachable from call args (incl. assignment indirection).
+
+    ``_target_candidates`` resolves only top-level identifiers; argv is
+    usually a LIST holding names (``run([STAGE_PATH, "--go"])``), so this
+    additionally resolves every identifier in each arg subtree through the
+    same-file assignment map. Same-module privates (resolver/flow state)
+    stay in-file by construction.
+    """
+    out = set(_target_candidates(args, resolver, flow))
+    for arg in args:
+        stack = [arg]
+        while stack:
+            node = stack.pop()
+            if node.type == "identifier":
+                name = _node_text(node, source)
+                for value in flow._collected.assignments.get(name, []):
+                    out.update(_literals_in(value, source))
+            stack.extend(node.children)
+    return out
+
+
+def _git_extraheader_in_call(call_node: Any, resolver: _Resolver, source: bytes) -> bool:
+    """True when call args carry ``git`` + ``config`` + ``extraheader``.
+
+    The argv-literal form of ``git config http.extraheader`` (planted auth
+    header — SHL-006's invocation shape at AST fidelity). All three tokens
+    required so stray "extraheader" prose in string data stays silent.
+    """
+    joined = " ".join(
+        literal for _, node in _args(call_node, source) for literal in _literals_in(node, source)
+    ).casefold()
+    return (
+        re.search(r"\bgit\b", joined) is not None
+        and re.search(r"\bconfig\b", joined) is not None
+        and "extraheader" in joined
+    )
+
+
 def _net_send_match(resolver: _Resolver, call_node: Any, source: bytes) -> str | None:
     """Send-sink classifier; returns the sink-short token or None."""
     lowered = (resolver.callee(call_node) or "").lower()
@@ -927,6 +1097,7 @@ def _scan_file_ast(
         flow.compute()
     else:
         pass
+    staged_downloads = _staged_download_targets(calls, resolver, flow, source)
 
     findings: list[Finding] = []
 
@@ -1042,6 +1213,48 @@ def _scan_file_ast(
                 if finding is not None:
                     findings.append(finding)
 
+        # --- LNS-PYS-009 staged download-then-execute ---
+        if staged_downloads and _staged_exec_kind(resolver, call_node, source) is not None:
+            argv_targets = _staged_argv_targets(
+                _positional_args(call_node, source), resolver, flow, source
+            )
+            for down_lineno, target in staged_downloads:
+                if down_lineno < lineno and target in argv_targets:
+                    base = re.split(r"[\\/]", target)[-1] or target
+                    finding = builder.build(
+                        "LNS-PYS-009",
+                        lineno,
+                        end_lineno,
+                        snippet,
+                        f"staged-py-exec:{base}",
+                        f"File '{base}' fetched from the network is executed "
+                        "by this sink — staged download-then-execute; "
+                        "whatever the endpoint served runs at run time.",
+                    )
+                    if finding is not None:
+                        findings.append(finding)
+                    break  # first download paired wins per sink site
+
+        # --- LNS-PYS-007 git-config-extraheader argv shape ---
+        # Gated on execution sinks (subprocess/os.system/os.exec*): argv
+        # literals of a launcher call, never stray string data or the
+        # detector's own pattern definitions (self-scan law).
+        if _staged_exec_kind(resolver, call_node, source) is not None and (
+            _git_extraheader_in_call(call_node, resolver, source)
+        ):
+            finding = builder.build(
+                "LNS-PYS-007",
+                lineno,
+                end_lineno,
+                snippet,
+                "git-config-extraheader",
+                "Call plants an Authorization-bearing git http.extraheader — "
+                "every future fetch/clone through the configured URL carries "
+                "the planted credential outward.",
+            )
+            if finding is not None:
+                findings.append(finding)
+
         # --- LNS-PYS-005/006/007 Hermes-state writes ---
         target_exprs = _write_target_exprs(call_node, source, resolver)
         write_like = bool(target_exprs) and lowered not in _DELETE_SINKS
@@ -1147,6 +1360,16 @@ _DEG_DELETE_CALL_RE = re.compile(
     r"\b(?:(?:shutil\s*\.\s*)?rmtree|os\s*\.\s*(?:remove|unlink|rmdir|removedirs))"
     r"\s*\(([^)]*)"
 )
+#: LNS-PYS-009 degraded vocabulary: urlretrieve download half + staged
+#: execution sinks. Same evidence tokens as AST mode (parity law D-039).
+_DEG_URLRETRIEVE_RE = re.compile(r"\burlretrieve\s*\(([^)]*)")
+_DEG_STAGED_EXEC_RE = re.compile(
+    r"\b(?:subprocess\s*\.\s*(?:run|call|check_call|check_output|Popen)"
+    r"|os\s*\.\s*(?:system|popen|exec\w*|startfile))\s*\("
+)
+#: LNS-PYS-007 git-config-extraheader degraded shape (mirrors E3's
+#: _GIT_EXTRAHEADER_RE so shell and Python agree on the invocation).
+_DEG_EXTRAHEADER_RE = re.compile(r"(?i)\bgit\b[^#\n]*\bconfig\b[^#\n]*extraheader")
 
 
 def _strip_comment(line: str) -> str:
@@ -1269,6 +1492,27 @@ def _scan_file_lines(
     tokens = line_tokens(text)
     assignments = _deg_assignment_map(tokens)
     decode_names = _deg_decode_names(tokens)
+    # LNS-PYS-009 degraded download half: (line, target literal) pairs for
+    # urlretrieve(url, path) lines; the second comma part is the path (the
+    # first is the URL — never a pair candidate). Names assigned to each
+    # target are recorded too so `[STAGE_PATH, ...]` argv still pairs.
+    deg_downloads: list[tuple[int, str]] = []
+    deg_download_names: dict[str, set[str]] = {}
+    for token in tokens:
+        code = _strip_comment(token["text"])
+        for dl_match in _DEG_URLRETRIEVE_RE.finditer(code):
+            parts = dl_match.group(1).split(",")
+            if len(parts) >= 2:
+                for candidate in _deg_blob_candidates(parts[1], assignments):
+                    norm = candidate.strip().strip("\"'").strip()
+                    if not norm:
+                        continue
+                    key = (token["line"], norm)
+                    if key not in deg_downloads:
+                        deg_downloads.append(key)
+                    names = {aname for aname, aval in assignments.items() if aval == norm}
+                    if names:
+                        deg_download_names.setdefault(norm, set()).update(names)
     findings: list[Finding] = []
 
     def emit(
@@ -1372,6 +1616,42 @@ def _scan_file_lines(
                 "(line-heuristic).",
             )
 
+        # LNS-PYS-009 staged download-then-execute (degraded pairing).
+        if deg_downloads and _DEG_STAGED_EXEC_RE.search(stripped) is not None:
+            for down_line, target in sorted(deg_downloads):
+                if down_line >= token["line"] or not target:
+                    continue
+                named = any(
+                    re.search(rf"\b{re.escape(aname)}\b", stripped) is not None
+                    for aname in sorted(deg_download_names.get(target, ()))
+                )
+                if target in stripped or named:
+                    base = re.split(r"[\\/]", target)[-1] or target
+                    emit(
+                        "LNS-PYS-009",
+                        token,
+                        stripped,
+                        f"staged-py-exec:{base}",
+                        f"File '{base}' fetched from the network is executed "
+                        "by this sink — staged download-then-execute "
+                        "(line-heuristic).",
+                    )
+                    break
+
+        # LNS-PYS-007 git-config-extraheader (degraded invocation shape).
+        # Same execution-sink gate as AST mode: the line must carry a
+        # launcher call, never stray string data (self-scan law).
+        if _DEG_STAGED_EXEC_RE.search(stripped) is not None and (
+            _DEG_EXTRAHEADER_RE.search(stripped) is not None
+        ):
+            emit(
+                "LNS-PYS-007",
+                token,
+                stripped,
+                "git-config-extraheader",
+                "Call plants an Authorization-bearing git http.extraheader (line-heuristic).",
+            )
+
         # LNS-PYS-005/006/007 state writes (shared routing)
         deg_targets: list[str] = []
         for open_match in _DEG_OPEN_CALL_RE.finditer(stripped):
@@ -1423,6 +1703,7 @@ def _scan_file_lines(
 # Cross-file taint (v1.0) — same-bundle, same-language, import-edge only
 # ---------------------------------------------------------------------------
 
+
 def _py_module_name(rel_path: str) -> str | None:
     """Bundle-relative module name for a ``.py`` file (``/``→``.``, strip ``.py``)."""
     if not rel_path.endswith(".py"):
@@ -1436,10 +1717,12 @@ def _py_module_name(rel_path: str) -> str | None:
         return ""
     return without.replace("/", ".")
 
+
 def _py_package_for_path(rel_path: str) -> str:
     """Package (dotted) containing *rel_path*; ``scripts/a.py`` => ``scripts``."""
     dir_part = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
     return dir_part.replace("/", ".")
+
 
 def _py_resolve_import(
     sink_path: str, import_mod: str, module_to_path: dict[str, str]
@@ -1473,6 +1756,7 @@ def _py_resolve_import(
         return module_to_path.get(absolute)
     return module_to_path.get(import_mod)
 
+
 @dataclass
 class _PyCrossInfo:
     path: str
@@ -1482,6 +1766,7 @@ class _PyCrossInfo:
     sink_shorts: set[str]
     sink_sites: dict[str, tuple[int, int, str]]
     escalated: bool
+
 
 def _py_collect_source_info(
     collected: _AstFile,
@@ -1535,6 +1820,7 @@ def _py_collect_source_info(
                     break
     return kinds, sites
 
+
 def _py_collect_sink_info(
     calls: list[Any],
     resolver: _Resolver,
@@ -1553,6 +1839,7 @@ def _py_collect_sink_info(
                 sites[short] = (start_line, end_line, snippet)
             shorts.add(short)
     return shorts, sites
+
 
 def _py_cross_findings(
     cross_infos: dict[str, _PyCrossInfo],
@@ -1648,9 +1935,11 @@ def _py_cross_findings(
     findings.sort(key=_finding_sort_key)
     return findings
 
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
+
 
 class PyScanEngine:
     """E4 implementation — AST sinks with golden-tested line-scanner fallback."""

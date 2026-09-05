@@ -24,13 +24,19 @@ rationale: >-
   or PEM block shipped in it hands the account to every downloader, whatever
   the author intended.
 detection: >-
-  Known key formats over all files incl. decoded views: AWS AKIA/ASIA ids
-  paired with their secret form, GCP service-account JSON private_key_id/
-  BEGIN PRIVATE KEY pairs, OpenAI sk- tokens, Slack xox[baprs]- tokens, and
-  PEM PRIVATE KEY blocks. Reports LOCATION ONLY; values are redacted to
-  prefix+length in any render (secrets never rendered unredacted).
+  Known key formats over all recorded text files (raw views only — the
+  recursive base64/hex decode ladder is deferred, so encoded blobs are out
+  of scope): AWS AKIA/ASIA ids paired with their secret form, GCP
+  service-account JSON private_key_id/ BEGIN PRIVATE KEY pairs, OpenAI sk-
+  tokens (excluding the sk-ant- shape), GitHub ghp_/gho_/ghs_/ghu_/ghr_
+  tokens, Google AIza API keys, Anthropic sk-ant- keys, Slack xox[baprs]-
+  tokens, and PEM PRIVATE KEY blocks. Reports LOCATION ONLY; values are
+  redacted to prefix+length in any render (secrets never rendered
+  unredacted).
 fixtures:
   positive:
     - corpus/fixtures/malicious/committed-keys
+    - corpus/fixtures/malicious/cloud-token-sprawl
   negative:
     - corpus/fixtures/benign/env-var-documentation
+    - corpus/fixtures/benign/token-format-docs

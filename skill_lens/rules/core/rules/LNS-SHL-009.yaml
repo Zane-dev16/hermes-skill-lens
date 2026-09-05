@@ -1,0 +1,42 @@
+# E3 — cross-platform dropper vocabulary: the Windows/macOS execution and
+# persistence primitives that POSIX-only grammars miss. Single-command
+# indicators (weaker than a complete curl|sh chain, hence the MEDIUM cap):
+# each shape is one step of a dropper or persistence install on its native
+# platform.
+id: LNS-SHL-009
+title: "Cross-platform dropper or persistence primitive"
+rule_version: "1"
+status: active
+engine: shellscan
+capability: execute.shell
+severity: MEDIUM
+weight: 7
+evidence_kind: regex
+confidence_default: 0.80
+static_only: false
+tags:
+  - dropper
+  - cross-platform
+  - persistence
+remediation: >-
+  Remove foreign-platform execution/persistence primitives from distributed
+  skill bundles; document setup steps the user runs deliberately instead.
+rationale: >-
+  iwr|iex, schtasks, Run-key writes, launchctl installs, and osascript are
+  the standard dropper/persistence inventory outside POSIX shells. A skill
+  carrying them targets hosts its author cannot review on — the shape of
+  opportunistic cross-platform droppers.
+detection: >-
+  Fire per matching line over shell text: PowerShell `iwr ... | iex` or
+  `Invoke-WebRequest ... | Invoke-Expression` (case-insensitive),
+  `schtasks ... /create`, `reg add ...\Run` (Run-key persistence),
+  `launchctl load|bootstrap|submit`, `osascript ... -e`. Listing-only
+  invocations (`schtasks /query`, `reg query`) never fire — only the
+  installing/executing verbs. Evidence carries the platform shape
+  (win-dropper:iwr-iex, win-persist:schtasks, win-persist:run-key,
+  mac-persist:launchctl, mac-exec:osascript).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/cross-platform-dropper
+  negative:
+    - corpus/fixtures/benign/sysadmin-runbook

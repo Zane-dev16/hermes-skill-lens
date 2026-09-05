@@ -1,0 +1,39 @@
+# E1 — broken resource references: SKILL.md prose pointing at bundle files
+# that do not exist. A dangling pointer is either a broken skill (the
+# referenced helper was never shipped) or a lure (the user is sent looking
+# where nothing is) — either way the author should fix the pointer or ship
+# the file.
+id: LNS-MAN-010
+title: "Skill prose references a bundle file that does not exist"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.85
+static_only: true
+tags:
+  - manifest-hygiene
+  - broken-reference
+remediation: >-
+  Fix the pointer to name the shipped file, or ship the referenced file;
+  remove references to files that were never meant to be bundled.
+rationale: >-
+  Bundled prose is the skill's user interface: every relative file pointer
+  in it is a promise that the file ships alongside. Dangling promises rot
+  into broken skills at best and send reviewers hunting at worst.
+detection: >-
+  Fire per relative markdown link/image target ([text](target)) in SKILL.md
+  resolving to no bundle file: only relative targets with document/script
+  suffixes (.md/.markdown/.sh/.py/.js/.mjs/.cjs/.ts/.json/.yaml/.yml/.toml/
+  .txt) are checked; http(s)://, protocol-relative, mailto:, data:, absolute
+  (/...), pure anchors, and empty targets are exempt. Targets resolve
+  against the SKILL.md directory; query/fragment suffixes strip first. One
+  finding per missing target; evidence missing-ref:<normalized target>.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/dangling-ref-notes
+  negative:
+    - corpus/fixtures/benign/linked-notes-intact

@@ -18,6 +18,7 @@ import pytest
 from skill_lens.engines import scan_bundle
 from skill_lens.engines.e7_secretscan import mask_secret, shannon_entropy
 from skill_lens.rules import load_core_pack
+from tests.conftest import _bundle
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,14 +26,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture(scope="module")
 def pack():
     return load_core_pack()
-
-
-def _bundle(root: Path, files: dict[str, str]) -> Path:
-    for rel, text in files.items():
-        dest = root / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
-    return root
 
 
 def _rule_findings(result, rule_id):
@@ -246,3 +239,42 @@ def test_mask_short_values_fully() -> None:
     masked = mask_secret("AKIAIOSFODNN7EXAMPLE")
     assert masked.startswith("AKIA")
     assert "<20 chars>" in masked
+
+
+@pytest.mark.parametrize(
+    ("token", "kind"),
+    [
+        ("ghp_c4D8f2A9b1E6a3C7d5F0e2B8a4D6c9E1b3A5d7", "github-token"),
+        ("gho_c4D8f2A9b1E6a3C7d5F0e2B8a4D6c9E1b3A5d7", "github-token"),
+        ("AIzaQx7B2mZ9K4vN6pL1sT3wY5cF8hJ0dG2eR4t", "google-api-key"),
+        ("sk-ant-x7B2mZ9K4vN6pL1sT3wY5cF8hJ0dG2", "anthropic-key"),
+    ],
+)
+def test_sec001_new_token_families_fire(pack, tmp_path, token, kind) -> None:
+    bundle = _bundle(tmp_path / kind, {"scripts/ship.sh": f'TOKEN="{token}"\n'})
+    fired = _rule_findings(scan_bundle(bundle, pack), "LNS-SEC-001")
+    assert len(fired) == 1
+    assert fired[0]["tags"][-1] == kind
+    assert token not in json.dumps([f["location"] for f in fired])
+
+
+def test_sec001_anthropic_key_not_double_reported_as_openai(pack, tmp_path) -> None:
+    token = "sk-ant-x7B2mZ9K4vN6pL1sT3wY5cF8hJ0dG2"
+    bundle = _bundle(tmp_path / "dedup", {"scripts/ship.sh": f'TOKEN="{token}"\n'})
+    fired = _rule_findings(scan_bundle(bundle, pack), "LNS-SEC-001")
+    assert len(fired) == 1
+    assert fired[0]["tags"][-1] == "anthropic-key"
+
+
+def test_sec001_truncated_placeholders_stay_silent(pack, tmp_path) -> None:
+    bundle = _bundle(
+        tmp_path / "placeholders",
+        {
+            "docs/tokens.md": (
+                "GitHub example: `ghp_EXAMPLE`.\n"
+                "Google example: `AIzaEXAMPLE`.\n"
+                "Anthropic example: `sk-ant-example`.\n"
+            )
+        },
+    )
+    assert _rule_findings(scan_bundle(bundle, pack), "LNS-SEC-001") == []

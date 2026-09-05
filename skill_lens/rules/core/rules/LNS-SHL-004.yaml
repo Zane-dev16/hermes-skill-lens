@@ -29,11 +29,15 @@ detection: >-
   whose normalized path label resolves to agent_home:<sub> where sub matches
   SOUL.md, AGENTS.md, CLAUDE.md, .cursorrules, .hermes.md, USER.md,
   MEMORY.md, memories/** (persona.write:memory), or any *.md directly under
-  the Hermes home root. Writes inside_skill_root never fire. Unknown-path
-  writes adjacent to those basenames fire at reduced confidence 0.65-0.75
-  (§4 conservative treatment).
+  the Hermes home root — plus durable shell/access persistence targets at
+  ANY label: shell-startup rc files (.bashrc/.zshrc/.profile and kin) and
+  ssh authorized_keys (evidence persistence-write:<kind>:<basename>;
+  inside-skill-root relatives stay silent). Writes inside_skill_root never
+  fire. Unknown-path writes adjacent to those basenames fire at reduced
+  confidence 0.65-0.75 (§4 conservative treatment).
 fixtures:
   positive:
     - corpus/fixtures/malicious/soul-poisoner
+    - corpus/fixtures/malicious/rc-persistence
   negative:
     - corpus/fixtures/benign/local-journal-writer

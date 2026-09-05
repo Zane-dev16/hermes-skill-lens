@@ -25,7 +25,9 @@ rationale: >-
 detection: >-
   Fire per fs write-family site whose target resolves under config.yaml /
   channel_directory.json / pairing/** / skills/** agent_home labels through
-  the shared §5.1 normalization (path.join forms combined). Any
+  the shared §5.1 normalization (path.join forms combined) — plus, at any
+  non-inside label, writes planting into .git/hooks/ (evidence
+  git-hooks-write:<basename>) via the same shared routing. Any
   platform_disabled token anywhere in the file escalates effective severity
   toward CRITICAL. Unresolvable config-basename targets fire reduced 0.70.
 fixtures:

@@ -27,12 +27,19 @@ rationale: >-
 detection: >-
   Fire per write sink whose normalized path label resolves to
   agent_home:<sub> for config.yaml, channel_directory.json, pairing/**, or
-  skills/**. Escalation: when the same FILE carries a platform_disabled /
-  security-tool-disable token, effective severity escalates toward CRITICAL
-  (engine-side, mirrors SHL-006). Unresolvable targets adjacent to those
-  basenames fire at reduced confidence 0.70 with an environment marker.
+  skills/** — plus, at any non-inside label, writes planting into
+  .git/hooks/ (evidence git-hooks-write:<basename>) and launcher-call argv
+  carrying git + config + extraheader (planted auth header; evidence
+  git-config-extraheader; execution-sink gated so string data and pattern
+  definitions never match). Escalation: when the same FILE carries a
+  platform_disabled / security-tool-disable token, effective severity
+  escalates toward CRITICAL (engine-side, mirrors SHL-006). Unresolvable
+  targets adjacent to those basenames fire at reduced confidence 0.70 with
+  an environment marker. E5 JSS-007 shares this routing verbatim, so the
+  same path targets fire from JavaScript sinks too.
 fixtures:
   positive:
     - corpus/fixtures/malicious/py-config-tamper
+    - corpus/fixtures/malicious/py-hook-plant
   negative:
     - corpus/fixtures/benign/self-contained-cache-writer

@@ -25,11 +25,14 @@ rationale: >-
   packets) smuggle payloads past visual review into scrollback and terminal
   emulators — a ghost-text lane alongside Unicode steganography.
 detection: >-
-  Fire per sequence over all decoded text views: OSC ... BEL|ST (evidence
-  carries the numeric selector when parsable), DCS, APC, PM, SOS ... ST.
-  Evidence tokens are channel shapes only — packet bodies are never quoted;
-  they feed the LNS-TXT-004 grammar scan instead. CSI sequences (SGR color,
-  cursor moves) are exempt as cosmetic.
+  Fire per sequence over raw text plus the engine's own ghost views
+  (invisible-stripped clean view and Tags-block decoded payload — the
+  recursive base64/hex decode ladder is deferred, so encoded blobs are out
+  of scope): OSC ... BEL|ST (evidence carries the numeric selector when
+  parsable), DCS, APC, PM, SOS ... ST. Evidence tokens are channel shapes
+  only — packet bodies are never quoted; they feed the LNS-TXT-004 grammar
+  scan instead. CSI sequences (SGR color, cursor moves) are exempt as
+  cosmetic.
 fixtures:
   positive:
     - corpus/fixtures/malicious/escape-stream-beacon

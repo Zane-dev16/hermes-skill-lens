@@ -1,0 +1,42 @@
+# E8 — pyproject [build-system] hooks: build backends execute at INSTALL
+# time on any consumer that builds the project (PEP 517: the backend is
+# imported and its hooks run). A non-allowlisted backend — or a backend-path
+# entry (a local directory placed on sys.path at build time) — is arbitrary
+# install-time code execution, the PyPI half of DEP-003's npm lane.
+id: LNS-DEP-004
+title: "pyproject build backend outside the allowlisted set"
+rule_version: "1"
+status: active
+engine: depintel
+capability: supply-chain
+severity: MEDIUM
+weight: 7
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: false
+tags:
+  - build-backend
+  - install-time-exec
+  - dependency-manifest
+remediation: >-
+  Build with a well-known backend (setuptools, hatchling, flit_core,
+  poetry-core, pdm-backend); never point build-backend at an unfamiliar
+  package or vendor a backend-path directory into a distributed skill.
+rationale: >-
+  PEP 517 build backends run with the installer's privileges before anyone
+  reviews the built artifact — historically the quiet half of dependency
+  confusion attacks. backend-path is worse: it executes vendored local code
+  by construction.
+detection: >-
+  Fire over pyproject.toml [build-system]: build-backend naming anything
+  outside the bundled allowlist (setuptools.build_meta incl. :__legacy__,
+  hatchling.build, flit_core.buildapi, poetry.core.masonry.api,
+  pdm.backend) fires once (evidence build-backend:<name>); any non-empty
+  backend-path entry fires once per directory (evidence
+  backend-path:<dir>). Absent [build-system] and allowlisted backends stay
+  silent. Fingerprint binds the normalized backend name / backend-path dir.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/evil-build-backend
+  negative:
+    - corpus/fixtures/benign/pinned-pyproject-tool

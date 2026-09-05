@@ -29,7 +29,6 @@ import shutil
 import pytest
 
 from skill_lens import packpins, packsec
-from skill_lens.canonical import canonical_dumps
 from skill_lens.engines import scan_bundle
 from skill_lens.report import build_report
 
@@ -282,7 +281,7 @@ def test_rules_list_shows_core_and_packs(tmp_path: pathlib.Path, monkeypatch) ->
     from skill_lens.slash import dispatch_verb
 
     out = dispatch_verb("rules list", view=_view(tmp_path), cache=_cache())
-    assert "core 2026.08.9" in out
+    assert "core 2026.08.10" in out
     assert "acme-rules 2026.01.1" in out
     assert "pin-match ok" in out
     ns = _namespace("rules", action="list")
@@ -345,7 +344,6 @@ def test_benign_registered_pack_keeps_envelope_byte_stable(
     """A registered pack whose rules fire nothing must not move the bytes."""
     fixture = REPO_ROOT / "corpus/fixtures/malicious/committed-keys"
     baseline = build_report(scan_bundle(fixture))
-    baseline_text = canonical_dumps(baseline)
     pack = _make_pack(tmp_path)
     with_pins = scan_bundle(
         fixture,
@@ -353,7 +351,21 @@ def test_benign_registered_pack_keeps_envelope_byte_stable(
             packpins.resolve_external_packs(project_dir=_project(tmp_path, _pin_toml(pack))).packs
         ),
     )
-    assert canonical_dumps(build_report(with_pins)) == baseline_text
+    pinned = build_report(with_pins)
+    # Findings, score, and every non-diagnostic key stay byte-identical —
+    # the community rule fired nothing and priced nothing.
+    assert {key: value for key, value in pinned.items() if key != "diagnostics"} == {
+        key: value for key, value in baseline.items() if key != "diagnostics"
+    }
+    # The ONLY sanctioned delta is the additive ``diagnostics`` mirror
+    # (Wave C): the unrunnable community rule is honestly recorded as an
+    # info diagnostic instead of silently dropped.
+    assert baseline["diagnostics"] == []
+    assert len(pinned["diagnostics"]) == 1
+    (record,) = pinned["diagnostics"]
+    assert record["code"] == "LNS-ENG-001"
+    assert record["severity"] == "info"
+    assert "LNS-NET-901" in record["message"]
     # ...and the envelope keeps reporting the governed CORE pack identity.
     assert with_pins.rule_pack_name == baseline["rule_pack"]["name"]
 

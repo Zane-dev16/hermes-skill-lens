@@ -1,0 +1,41 @@
+# E1 — dot-file ingest bypass surfacing: ingest skips dot-FILES as
+# packaging metadata (D-011) and records each skip as an LNS-ING-DOTFILE
+# diagnostic — but a skipped file is an UNSCANNED file, and unscanned bytes
+# are precisely where a payload hides. This rule promotes the skip into a
+# visible LOW finding so the bypass is reviewable instead of silent.
+id: LNS-ING-001
+title: "Bundle contains dot-files skipped by ingest"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: true
+tags:
+  - ingest-coverage
+  - dotfile
+remediation: >-
+  Remove packaging dot-files (.DS_Store, editor state) from the bundle, or
+  accept the finding as the recorded note that those bytes were not
+  scanned; never stash executable payload in dot-files to dodge review.
+rationale: >-
+  The scanner cannot vouch for bytes it never read. Dot-file payloads are
+  invisible to every content engine by construction (ingest skips dot-files
+  and prunes dot-directories, keeping baseline stores and VCS metadata out
+  of bundle hashes) — so each skipped FILE must be a finding, or hiding in
+  a dot-file is a free bypass. Known residual: payloads inside pruned
+  dot-directories (.git/ and kin) stay silent by D-011 design; that larger
+  question belongs to a future ingest revision, not this rule.
+detection: >-
+  Fire once per bundle when ingest recorded LNS-ING-DOTFILE skips: evidence
+  dotfiles-skipped:<n>:<sorted basenames> over the skipped dot-file names.
+  One finding per bundle regardless of count; the message lists every
+  skipped name. Bundles with no skipped dot-files stay silent.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/dotfile-shadow-payload
+  negative:
+    - corpus/fixtures/benign/clean-desk-notes

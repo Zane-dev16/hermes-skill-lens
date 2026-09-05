@@ -26,9 +26,10 @@ detection: >-
   Fire per fs write-family site (writeFile/writeFileSync/appendFile/
   appendFileSync/createWriteStream, fs.open with write flags) whose target
   classifies as agent_home:<persona|memories> through the shared §5.1 path
-  normalization (path.join forms combined). Unresolvable targets adjacent
-  to known persona basenames fire reduced at 0.70 when an env marker
-  co-occurs.
+  normalization (path.join forms combined) — plus shell-startup rc files
+  and ssh authorized_keys at agent_home AND outside ($HOME) labels via the
+  same shared routing. Unresolvable targets adjacent to known persona
+  basenames fire reduced at 0.70 when an env marker co-occurs.
 fixtures:
   positive:
     - corpus/fixtures/malicious/js-state-tamper

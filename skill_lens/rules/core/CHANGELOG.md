@@ -5,7 +5,34 @@
      semantics are SPEC §15: new rule = patch; weight/severity change =
      minor + rationale; deprecation ships >=2 minors before removal. -->
 
-Current version: **2026.08.9** · 44 rules
+Current version: **2026.08.10** · 51 rules
+
+## 2026.08.10 — 2026-09-03
+
+- New rules (all both-way fixtured): LNS-ING-001 (ingest dot-skip
+- diagnostic LNS-ING-DOTFILE promoted to a LOW finding by E1),
+- LNS-SHL-008 (curl/wget -o/-O/redirect then later same-basename
+- exec; tarball-in/different-file-out stays silent), LNS-SHL-009
+- (iwr|iex, schtasks /create, reg add Run, launchctl
+- load/bootstrap/submit, osascript -e; listing verbs stay silent),
+- LNS-PYS-009 (urlretrieve path into subprocess/os.system/os.exec*
+- same-literal ordered pairing, AST + degraded), LNS-DEP-004
+- (non-allowlisted build-backend + any backend-path), LNS-MAN-009
+- (missing name/description; mismatch stays diagnostic-only),
+- LNS-MAN-010 (relative SKILL.md links to no bundle file).
+- Widenings: SHL-001 pipe interpreters +python3/node/perl/ruby;
+- SHL-004/PYS-005 (+JSS-005 via shared routing) rc files +
+- authorized_keys; SHL-006/PYS-007 .git/hooks writes + git config
+- http.extraheader invocations; TXT-004 concealment demands +
+- approval-forgery/vendor-authority imperatives (new pattern ids,
+- same MED/static band); SEC-001 ghp_/gho_/ghs_/ghu_/ghr_, AIza,
+- sk-ant- families (sk-ant- excluded from the sk- shape).
+- Honesty rewords (no detection change): decoded-view claims dropped
+- in LNS-SEC-001/LNS-NET-012/LNS-SHL-001/LNS-TXT-003 and the SHL-002
+- chain-shape message (decode ladder still deferred).
+
+Rationale:
+  - Detection-gap wave (patch: seven new rules, grammar widenings, honesty rewords; no material severity/weight/capability/engine/evidence_kind/ confidence_default changes to existing rules): LNS-ING-001 dot-file skip surfacing, LNS-SHL-008 staged download-then-execute, LNS-SHL-009 cross-platform dropper vocab, LNS-PYS-009 urlretrieve staging, LNS-DEP-004 pyproject build-backend hooks, LNS-MAN-009 manifest completeness, LNS-MAN-010 broken resource refs. Vectors byte-exact, benign floor holds.
 
 ## 2026.08.9 — 2026-08-28
 

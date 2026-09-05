@@ -1,0 +1,5 @@
+category = "tools"
+
+[[expect_rules]]
+rule_id = "LNS-SHL-009"
+severity_band = ["MEDIUM"]

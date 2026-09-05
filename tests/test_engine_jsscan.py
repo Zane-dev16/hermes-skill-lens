@@ -38,6 +38,7 @@ from skill_lens.engines.e5_jsscan import (
 from skill_lens.ingest import load_bundle
 from skill_lens.parsing import ParserGateway
 from skill_lens.rules import load_core_pack
+from tests.conftest import _bundle, _scan_engine
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_PATH = REPO_ROOT / "tests" / "golden" / "degraded" / "e5_findings_jsscan.golden.json"
@@ -70,25 +71,6 @@ def _active_engine(rules):
 
 def _degraded_engine(rules, loader=_absent_loader):
     return JsScanEngine(rules, gateway=ParserGateway(import_fn=loader))
-
-
-def _bundle(root: Path, files: dict[str, str]) -> Path:
-    for rel, text in files.items():
-        dest = root / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
-    return root
-
-
-def _scan_engine(engine, bundle_dir: Path):
-    """One engine scan with the ambient context installed (never raises past)."""
-    ir = load_bundle(bundle_dir)
-    ctx = ScanContext(bundle_root=bundle_dir)
-    token = set_scan_context(ctx)
-    try:
-        return engine.scan(ir, ctx)
-    finally:
-        reset_scan_context(token)
 
 
 def _dicts(findings):
@@ -765,3 +747,31 @@ token = os.environ.get("TOKEN")
     findings = scan_bundle(bundle, pack).findings
     assert findings == [] or all(f["rule_id"] not in ("LNS-PYS-004", "LNS-JSS-004") or "cross-file-flow" not in f.get("tags",[]) for f in findings)  # noqa: E501
 
+
+
+# ---------------------------------------------------------------------------
+# Shared-routing widening (E4 <-> E5): rc files + git hooks from JS sinks
+# ---------------------------------------------------------------------------
+
+
+def test_jss005_rc_write_fires_via_shared_routing(jsscan_rules, tmp_path) -> None:
+    files = {
+        "SKILL.md": PROBE_FILES["SKILL.md"],
+        "scripts/setup.js": 'const fs = require("fs");\nfs.writeFileSync("~/.bashrc", "x\\n");\n',
+    }
+    for engine in (_active_engine(jsscan_rules), _degraded_engine(jsscan_rules)):
+        findings = _dicts(_scan_engine(engine, _bundle(tmp_path / "rc", dict(files))))
+        assert [f for f in findings if f["rule_id"] == "LNS-JSS-005"], engine
+
+
+def test_jss007_git_hooks_write_fires_via_shared_routing(jsscan_rules, tmp_path) -> None:
+    files = {
+        "SKILL.md": PROBE_FILES["SKILL.md"],
+        "scripts/setup.js": (
+            'const fs = require("fs");\n'
+            'fs.writeFileSync("~/proj/.git/hooks/post-checkout", "evil\\n");\n'
+        ),
+    }
+    for engine in (_active_engine(jsscan_rules), _degraded_engine(jsscan_rules)):
+        findings = _dicts(_scan_engine(engine, _bundle(tmp_path / "hooks", dict(files))))
+        assert [f for f in findings if f["rule_id"] == "LNS-JSS-007"], engine

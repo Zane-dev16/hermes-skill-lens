@@ -1,0 +1,41 @@
+# E4 — SHL-008's AST sibling: the audit-named urlretrieve→subprocess(argv)
+# shape at Python fidelity. A download call that lands in a path and a LATER
+# execution sink over that SAME literal path are each reviewable alone;
+# ordered together they are the staged dropper without a shell pipe.
+id: LNS-PYS-009
+title: "Staged download-then-execute via urlretrieve into a sink"
+rule_version: "1"
+status: active
+engine: pyscan
+capability: execute.shell
+severity: HIGH
+weight: 18
+evidence_kind: ast
+confidence_default: 0.88
+static_only: false
+tags:
+  - staged-execution
+  - dropper
+remediation: >-
+  Download to a file, verify a pinned checksum, then execute the local copy
+  only after review; never hand a fetched path to subprocess/os.system in
+  the same unattended flow.
+rationale: >-
+  urlretrieve(URL, path) followed by subprocess over that path preserves
+  the dropper's effect with no shell pipe for SHL-001/SHL-008 to see:
+  whatever the endpoint served at run time executes. Exact-literal pairing
+  (through same-file assignments) keeps verified-then-renamed flows silent.
+detection: >-
+  Same-file ordered pairing: a urlretrieve(url, path) call (any alias form;
+  path resolves through same-file simple assignments) followed by a LATER
+  subprocess run/call/check_*/Popen, os.system/popen, os.exec* family, or
+  os.startfile call whose argument literals contain that SAME path. One
+  finding per sink site; evidence staged-py-exec:<basename>. Degraded mode
+  pairs urlretrieve lines with sink lines by the same literal vocabulary at
+  regex confidence. Cross-file staging stays out of scope (taint edges are
+  PYS-004's lane).
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/py-fetch-and-run
+  negative:
+    - corpus/fixtures/benign/py-fetch-and-verify

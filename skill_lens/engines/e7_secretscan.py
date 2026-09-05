@@ -2,13 +2,15 @@
 
 Detection per core-pack rule specs (SPEC §4 row E7 / §17 R9):
 
-- **LNS-SEC-001** known key formats over every decodable file (incl. the
-  IR's decoded-view promise once the decode ladder lands): AWS access-key
-  ids PAIRED with their 40-char secret form in the same file, PEM PRIVATE
-  KEY blocks, OpenAI ``sk-`` tokens, Slack ``xox?-`` tokens, and GCP
-  service-account JSON (``private_key_id`` + PEM together — classified as
-  the more specific GCP shape instead of emitting a second plain-PEM
-  finding for the same block, DECISIONS D-024). ``static_only=false``: a
+- **LNS-SEC-001** known key formats over every decodable file (raw text
+  views only — the recursive base64/hex decode ladder is deferred, so
+  encoded blobs are out of scope): AWS access-key ids PAIRED with their
+  40-char secret form in the same file, PEM PRIVATE KEY blocks, OpenAI
+  ``sk-`` tokens, GitHub ``ghp_``/``gho_``/``ghs_``/``ghu_``/``ghr_``
+  tokens, Google ``AIza`` API keys, Anthropic ``sk-ant-`` keys, Slack
+  ``xox?-`` tokens, and GCP service-account JSON (``private_key_id`` + PEM
+  together — classified as the more specific GCP shape instead of emitting
+  a second plain-PEM finding for the same block, DECISIONS D-024). ``static_only=false``: a
   format-complete credential is usable AS-IS by any reader.
 - **LNS-SEC-002** Shannon-entropy windows (>=24 chars at >=4.8 bits/char,
   thresholds pinned by D-014 against this pack's benign corpus) restricted
@@ -59,7 +61,16 @@ RULE_IDS: tuple[str, ...] = ("LNS-SEC-001", "LNS-SEC-002")
 
 _AWS_ID_RE = re.compile(r"\b((?:AKIA|ASIA)[0-9A-Z]{16})\b")
 _AWS_SECRET_RE = re.compile(r"(?<![A-Za-z0-9/+=])([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])")
-_OPENAI_TOKEN_RE = re.compile(r"\b(sk-(?:proj-)?[A-Za-z0-9_-]{20,})\b")
+_OPENAI_TOKEN_RE = re.compile(r"\b(sk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{20,})\b")
+#: GitHub personal/OAuth/server/user-to-server tokens (ghp_/gho_/ghs_/
+#: ghu_/ghr_ + 36+ secret chars). The sk-ant- negative lookahead keeps
+#: Anthropic keys out of the OpenAI shape (they share the sk- prefix).
+_GITHUB_TOKEN_RE = re.compile(r"\b((?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,})\b")
+#: Google API keys: AIza + 35 secret chars (39 total, fixed shape).
+_GOOGLE_API_KEY_RE = re.compile(r"\b(AIza[A-Za-z0-9_-]{35})\b")
+#: Anthropic API keys: sk-ant- + 20+ secret chars (matches the OpenAI
+#: family prefix, so this check runs BEFORE the sk- shape excludes it).
+_ANTHROPIC_TOKEN_RE = re.compile(r"\b((?:sk-ant-)[A-Za-z0-9_-]{20,})\b")
 _SLACK_TOKEN_RE = re.compile(r"\b(xox[abprs]-[A-Za-z0-9-]{10,})\b")
 _PEM_BEGIN_RE = re.compile(r"-----BEGIN ((?:RSA |EC )?PRIVATE KEY)-----")
 _PEM_END_RE = re.compile(r"-----END ((?:RSA |EC )?PRIVATE KEY)-----")
@@ -170,23 +181,41 @@ class SecretScanEngine:
         aws_ids: list[tuple[int, str]] = []
         aws_secrets: list[tuple[int, str]] = []
         openai_hits: list[tuple[int, str]] = []
+        github_hits: list[tuple[int, str]] = []
+        google_hits: list[tuple[int, str]] = []
+        anthropic_hits: list[tuple[int, str]] = []
         slack_hits: list[tuple[int, str]] = []
         pem_blocks: list[tuple[int, int, str]] = []  # (begin_line, end_line, algo)
 
         for lineno, line in enumerate(lines, start=1):
-            if len(line) < 40 and not (
-                "AKIA" in line or "ASIA" in line or "sk-" in line or "xox" in line
+            if len(line) < 36 and not (
+                "AKIA" in line
+                or "ASIA" in line
+                or "sk-" in line
+                or "xox" in line
+                or "ghp_" in line
+                or "gho_" in line
+                or "ghs_" in line
+                or "ghu_" in line
+                or "ghr_" in line
+                or "AIza" in line
             ):
                 # Necessary-condition gate (PERF): _AWS_SECRET_RE needs 40
-                # class chars, and the id/openai/slack regexes need their
-                # literals — a line with neither length nor literals can
-                # match none of the four.
+                # class chars, the Google shape needs 39, and the id/token
+                # regexes need their literals — a line with neither length
+                # nor literals can match none of the seven.
                 continue
             if not (
                 "AKIA" in line
                 or "ASIA" in line
                 or "sk-" in line
                 or "xox" in line
+                or "ghp_" in line
+                or "gho_" in line
+                or "ghs_" in line
+                or "ghu_" in line
+                or "ghr_" in line
+                or "AIza" in line
                 or _SECRET_RUN_RE.search(line)
             ):
                 # Second-stage necessary-condition gate (PERF): without the
@@ -199,6 +228,12 @@ class SecretScanEngine:
                 aws_secrets.append((lineno, match.group(1)))
             for match in _OPENAI_TOKEN_RE.finditer(line):
                 openai_hits.append((lineno, match.group(1)))
+            for match in _GITHUB_TOKEN_RE.finditer(line):
+                github_hits.append((lineno, match.group(1)))
+            for match in _GOOGLE_API_KEY_RE.finditer(line):
+                google_hits.append((lineno, match.group(1)))
+            for match in _ANTHROPIC_TOKEN_RE.finditer(line):
+                anthropic_hits.append((lineno, match.group(1)))
             for match in _SLACK_TOKEN_RE.finditer(line):
                 slack_hits.append((lineno, match.group(1)))
         # Necessary-condition gate: a PEM block requires a BEGIN marker, so a
@@ -278,6 +313,34 @@ class SecretScanEngine:
                     "Slack-format token committed",
                 )
             )
+        for family, hits, kind_tag, message in (
+            ("github", github_hits, "github-token", "GitHub-format token committed"),
+            ("google-api", google_hits, "google-api-key", "Google API key committed"),
+            (
+                "anthropic",
+                anthropic_hits,
+                "anthropic-key",
+                "Anthropic-format key committed",
+            ),
+        ):
+            seen_tokens = set()
+            for lineno, value in hits:
+                if value in seen_tokens:
+                    continue
+                seen_tokens.add(value)
+                snippet = _masked_line(lines[lineno - 1], value)
+                findings.append(
+                    self._sec001_finding(
+                        rule,
+                        rel_path,
+                        f"{family}:{mask_secret(value)}",
+                        lineno,
+                        lineno,
+                        snippet,
+                        kind_tag,
+                        message,
+                    )
+                )
         return findings
 
     def _sec001_finding(

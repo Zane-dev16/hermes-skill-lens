@@ -98,6 +98,8 @@ CODE_INGEST_FILE_CAP = "LNS-ING-FILE-CAP"  # >max_files files in bundle
 CODE_INGEST_SIZE_CAP = "LNS-ING-SIZE-CAP"  # >max_total_bytes canonical bytes
 CODE_INGEST_FILE_SIZE = "LNS-ING-FILE-SIZE"  # single file projected (>16 MiB)
 CODE_INGEST_READ = "LNS-ING-READ"  # unreadable file/dir entry skipped
+CODE_INGEST_DOTFILE = "LNS-ING-DOTFILE"  # dot-entry skipped (contents unscanned)
+CODE_INGEST_MANIFEST = "LNS-ING-MANIFEST"  # no usable SKILL.md manifest in bundle
 CODE_INGEST_TARGET = "LNS-ING-TARGET"  # missing/unsupported scan target
 CODE_INGEST_ZIP = "LNS-ING-ZIP"  # malformed zip container
 CODE_INGEST_ENCODING = "LNS-ING-ENCODING"  # non-UTF-8 file content
@@ -1004,7 +1006,7 @@ def _collect_bundle_files(
                     continue
                 if entry.is_dir(follow_symlinks=False):
                     if name.startswith("."):
-                        continue
+                        continue  # dot-dirs stay packaging metadata (D-011)
                     walk(directory / name, child_rel, depth + 1)
                     continue
                 if not entry.is_file(follow_symlinks=False):
@@ -1015,6 +1017,16 @@ def _collect_bundle_files(
                     )
                     continue
                 if name.startswith("."):
+                    # Dot-FILES are skipped like packaging metadata (D-011) —
+                    # but the skip is now VISIBLE: one info diagnostic per
+                    # file so dot-file payloads cannot hide silently
+                    # (LNS-ING-001 surfaces them as a finding).
+                    diags.info(
+                        CODE_INGEST_DOTFILE,
+                        f"dot-file not ingested: {'/'.join(child_rel)} (contents unscanned)",
+                        path=label,
+                        detail={"dot_entry": "/".join(child_rel)},
+                    )
                     continue
                 st_size = entry.stat(follow_symlinks=False).st_size
                 projected = min(st_size, ceilings.max_file_bytes)
@@ -1114,7 +1126,10 @@ def _load_dir_bundle(
         provenance = enrich_provenance(ref, lock)
 
     frontmatter = _resolve_frontmatter_or_fallback(
-        fm_text, fallback_name=identity.name, diags=diags
+        fm_text,
+        fallback_name=identity.name,
+        diags=diags,
+        path=f"{label}/{_SKILL_DOC}",
     )
     claims = (
         extract_all_claims(
@@ -1279,9 +1294,21 @@ def _resolve_frontmatter_or_fallback(
     *,
     fallback_name: str,
     diags: DiagnosticsCollector,
+    path: str | None = None,
 ) -> ResolvedFrontmatter:
     """Frontmatter resolution that always yields a usable manifest section."""
     if text is None:
+        # DX law: a bundle with no readable manifest must never scan
+        # clean-looking. Warning (not error) on purpose — hubview refuses
+        # to hash+queue error-carrying bundles, and a manifest-less tree
+        # with scripts is still worth scanning; the report layer renders
+        # this warning first-class instead.
+        diags.warning(
+            CODE_INGEST_MANIFEST,
+            "no SKILL.md manifest found in bundle; "
+            "manifest claims unavailable (scan covers files only)",
+            path=path,
+        )
         return ResolvedFrontmatter(
             name=fallback_name,
             validation_errors=("SKILL.md missing, unreadable, or not valid text",),
@@ -1354,6 +1381,7 @@ def _load_single_skill_doc(
         fm_text,
         fallback_name=path.parent.name or _SKILL_DOC,
         diags=diags,
+        path=as_given,
     )
     claims = (
         extract_all_claims(
@@ -1476,6 +1504,13 @@ def _load_zip_bundle(
                     continue  # dot-path packaging metadata (D-011 rule)
                 base = parts[-1]
                 if not base or base.startswith("."):
+                    if base.startswith("."):
+                        diags.info(
+                            CODE_INGEST_DOTFILE,
+                            f"dot-file member not ingested: {name} (contents unscanned)",
+                            path=name,
+                            detail={"dot_entry": name},
+                        )
                     continue
                 mode = info.external_attr >> 16
                 if mode and stat.S_ISLNK(mode):
@@ -1538,6 +1573,7 @@ def _load_zip_bundle(
         fm_text,
         fallback_name=Path(as_given).stem or path.stem,
         diags=diags,
+        path=as_given,
     )
     return SkillIR(
         identity=BundleIdentity(

@@ -31,12 +31,19 @@ detection: >-
   sentinel), fake system-prompt framing (line-anchored SYSTEM:/ASSISTANT:/#
   System headers, "you are now unrestricted", "no longer bound"), override
   imperatives ("ignore/disregard previous instructions", "new instructions:",
-  "from now on"), and extraction demands ("reveal your system prompt").
-  Evidence = pattern id + sanitized normalized span (fingerprint-stable).
+  "from now on"), extraction demands ("reveal your system prompt"),
+  concealment demands ("do not tell the user", "hide your tracks",
+  "delete the logs", "without notifying anyone", "keep this secret",
+  "act innocent"), and approval-forgery/vendor-authority imperatives
+  ("approved by Anthropic/OpenAI/Hermes", "you are whitelisted", "the
+  platform requires you", "official directive"). Evidence = pattern id +
+  sanitized normalized span (fingerprint-stable).
 fixtures:
   positive:
     - corpus/fixtures/malicious/im-start-hijack
     - corpus/fixtures/malicious/escape-stream-beacon
     - corpus/fixtures/malicious/unicode-stego
+    - corpus/fixtures/malicious/shadow-directive
   negative:
     - corpus/fixtures/benign/terminal-color-reporter
+    - corpus/fixtures/benign/policy-docs-note

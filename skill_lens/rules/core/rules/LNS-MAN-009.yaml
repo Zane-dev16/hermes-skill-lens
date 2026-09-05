@@ -1,0 +1,42 @@
+# E1 — manifest completeness: the required-field presence hook
+# (required_field_gaps) finally emits. A bundle whose frontmatter lacks a
+# name or a description cannot be identified or meaningfully claimed
+# against — the claims pipeline and every human surface key off those two
+# fields.
+id: LNS-MAN-009
+title: "Manifest frontmatter is missing a required field"
+rule_version: "1"
+status: active
+engine: manifest
+capability: integrity.override
+severity: LOW
+weight: 2
+evidence_kind: manifest
+confidence_default: 0.90
+static_only: true
+tags:
+  - manifest-hygiene
+  - completeness
+remediation: >-
+  Give the skill a name matching its directory and a description stating
+  its concrete capabilities; both fields are required by the bundle
+  contract.
+rationale: >-
+  Name and description are the bundle's identity and its claim surface: the
+  claim extractor, the overreach diff, and every report line key off them.
+  A bundle missing either is unidentifiable (name) or unclaimable
+  (description) — flag the omission, not the author.
+detection: >-
+  Fire once per missing-or-empty required field (name, description) per the
+  required_field_gaps hook; evidence missing-field:<field>. Unreadable
+  frontmatter (missing/unparsable SKILL.md) stays silent — parse diagnostics
+  own that signal (MAN-004's flag-silence-not-blindness law). Name-vs-
+  directory consistency stays diagnostic-only (LNS-FRONT-NAME-MISMATCH):
+  install directory names are not authoritative, so mismatch is not a
+  finding.
+fixtures:
+  positive:
+    - corpus/fixtures/malicious/manifest-nameless
+    - corpus/fixtures/malicious/manifest-undescribed
+  negative:
+    - corpus/fixtures/benign/workflow-notes-helper
