@@ -47,7 +47,7 @@ mkdir -p /tmp/lens-proj/.hermes/plugins
 ln -s /root/hermes-skill-lens/hermes-skill-lens /tmp/lens-proj/.hermes/plugins/lens
 cd /tmp/lens-proj
 export HERMES_ENABLE_PROJECT_PLUGINS=1 HERMES_HOME=/tmp/lens-dev
-hermes plugins list --plain --no-bundled     # -> enabled  git  0.9.0a0  lens
+hermes plugins list --plain --no-bundled     # -> enabled  git  1.0.0  lens
 ```
 
 ## Host facts these commands rely on

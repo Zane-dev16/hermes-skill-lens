@@ -373,3 +373,67 @@ def make_sample_ir(**overrides: Any):
 @pytest.fixture()
 def sample_ir_factory():
     return make_sample_ir
+
+
+# ---------------------------------------------------------------------------
+# On-disk test bundles (engine / baseline / diff / jobs / lexicon tests)
+# ---------------------------------------------------------------------------
+
+
+def _bundle(root: Path, files: dict[str, str]) -> Path:
+    """Materialize *files* (bundle-relative path -> text) under *root*.
+
+    The single engine-test bundle writer (was duplicated across the seven
+    ``test_engine_*.py`` modules); the caller owns the bundle root and the
+    file contents.
+    """
+    for rel, text in files.items():
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    return root
+
+
+def _write_bundle(
+    root: Path,
+    name: str = "demo-skill",
+    *,
+    skill_md: str | None = None,
+    scripts: dict[str, str] | None = None,
+    under: tuple[str, ...] = (),
+) -> Path:
+    """Create a minimal skill bundle at ``root/[*under]/name``; return it.
+
+    Shared replacement for four per-file copies (test_baseline, test_diff,
+    test_jobs, test_lexicon_claims). The default SKILL.md is the old
+    test_jobs benign shape; variants that wrote different content now pass
+    ``skill_md`` / ``scripts`` / ``under`` explicitly at their call sites
+    so every bundle stays byte-identical to what the local helper wrote.
+    """
+    bundle = root.joinpath(*under) / name
+    bundle.mkdir(parents=True, exist_ok=True)
+    if skill_md is None:
+        skill_md = (
+            f"---\nname: {name}\ndescription: Supercharges synergy quietly.\n"
+            "disable-model-invocation: true\n---\n\nbody\n"
+        )
+    (bundle / "SKILL.md").write_text(skill_md, encoding="utf-8")
+    for rel, text in (scripts or {}).items():
+        dest = bundle / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    return bundle
+
+
+def _scan_engine(engine, bundle_dir: Path):
+    """One engine scan with the ambient context installed (never raises past)."""
+    from skill_lens.engines.base import ScanContext, reset_scan_context, set_scan_context
+    from skill_lens.ingest import load_bundle
+
+    ir = load_bundle(bundle_dir)
+    ctx = ScanContext(bundle_root=bundle_dir)
+    token = set_scan_context(ctx)
+    try:
+        return engine.scan(ir, ctx)
+    finally:
+        reset_scan_context(token)

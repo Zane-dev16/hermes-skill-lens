@@ -103,7 +103,7 @@ ACTION_SCHEMA: dict[str, Any] = {
 
 # SEVERITY order — canonical, shared with scorer/rules.
 try:  # RELATIVE import law; keep choirs import-clean when scorer absent (tests).
-    from .scoring import SEVERITY_TIERS as _SEVERITY_TIERS  # type: ignore
+    from .scoring import SEVERITY_TIERS as _SEVERITY_TIERS  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover — scorer import should never fail in prod
     _SEVERITY_TIERS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 SEVERITY_TIERS: tuple[str, ...] = tuple(_SEVERITY_TIERS)
@@ -542,21 +542,30 @@ def _choir_dir(data_dir: Path | str | None) -> Path | None:
     return path
 
 
+def _canonical_dumps(obj: Any) -> str:
+    """Canonical JSON text for choir sidecars/events, with a json fallback.
+
+    Single home for the try-import dance previously duplicated in
+    :func:`_persist_sidecar` and :func:`_append_choir_event`: use
+    :func:`skill_lens.canonical.canonical_dumps` when importable (the prod
+    path) and degrade to the same-shape json.dumps when the module is
+    unavailable (standalone test imports). Never raises.
+    """
+    try:
+        from .canonical import canonical_dumps
+    except Exception:  # pragma: no cover — canonical is always present in prod
+        return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return canonical_dumps(obj)
+
+
 def _persist_sidecar(report: ChoirReport, data_dir: Path | str | None, hash8: str) -> None:
     if not hash8:
         return
     choir_path = _choir_dir(data_dir)
     if choir_path is None:
         return
-    try:
-        from .canonical import canonical_dumps as _dumps
-    except Exception:  # pragma: no cover — fallback to json
-
-        def _dumps(obj: Any) -> str:  # type: ignore[no-redef]
-            return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
     payload = report.to_dict()
-    text = _dumps(payload)
+    text = _canonical_dumps(payload)
     target = choir_path / f"{hash8}.json"
     # Own lock, best-effort, never raises.
     try:
@@ -589,13 +598,6 @@ def _append_choir_event(
     choir_path = _choir_dir(data_dir)
     if choir_path is None:
         return
-    try:
-        from .canonical import canonical_dumps as _dumps
-    except Exception:  # pragma: no cover
-
-        def _dumps(obj: Any) -> str:  # type: ignore[no-redef]
-            return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
     record = {
         "schema": "lens.choir-events/1",
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
@@ -611,7 +613,7 @@ def _append_choir_event(
     }
     envelope_text: str
     try:
-        envelope_text = _dumps(record)
+        envelope_text = _canonical_dumps(record)
     except Exception:
         logger.debug("choir: event record unserializable", exc_info=True)
         return

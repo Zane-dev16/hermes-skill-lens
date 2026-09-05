@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import urllib.request
 from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,11 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 EnrichFetch = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
-def _default_fetch(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+def _default_fetch(
+    payload: Mapping[str, Any],
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> Mapping[str, Any]:
     """Real transport: one POST to api.osv.dev. Injected away in tests."""
     request = urllib.request.Request(
         OSV_QUERY_ENDPOINT,
@@ -59,7 +64,7 @@ def _default_fetch(payload: Mapping[str, Any]) -> Mapping[str, Any]:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8", errors="replace"))
 
 
@@ -68,16 +73,22 @@ def query_osv(
     ecosystem: str,
     *,
     fetch: EnrichFetch | None = None,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> list[str]:
     """Sorted advisory ids for one package; raises on transport failure.
 
-    Callers that must never raise go through :func:`enrich_envelope`, which
-    counts failures into its summary instead.
+    ``timeout_seconds`` bounds the DEFAULT transport per request (an
+    injected *fetch* owns its own bounds). Callers that must never raise go
+    through :func:`enrich_envelope`, which counts failures into its summary
+    instead.
     """
     osv_ecosystem = _OSV_ECOSYSTEMS.get(ecosystem)
     if osv_ecosystem is None:
         return []
-    response = (fetch or _default_fetch)({"package": {"name": name, "ecosystem": osv_ecosystem}})
+    transport: EnrichFetch = fetch if fetch is not None else partial(
+        _default_fetch, timeout=timeout_seconds
+    )
+    response = transport({"package": {"name": name, "ecosystem": osv_ecosystem}})
     vulns = response.get("vulns") if isinstance(response, Mapping) else None
     if not isinstance(vulns, list):
         return []
@@ -103,9 +114,9 @@ def enrich_envelope(
 
     ``root`` is the scanned bundle directory (dir targets only; other target
     kinds report ``skipped`` because their manifests are not re-readable at
-    this layer). ``fetch``/``timeout_seconds`` are test seams and bounds.
+    this layer). ``fetch`` is a test seam; ``timeout_seconds`` bounds each
+    request of the default transport.
     """
-    del timeout_seconds  # reserved: per-request bound rides _default_fetch today
     findings = envelope.get("findings")
     if not isinstance(findings, list):
         return envelope
@@ -138,7 +149,9 @@ def enrich_envelope(
         lookup: dict[tuple[str, str], list[str]] = {}
         for ecosystem, package in sorted(pairs):
             try:
-                ids = query_osv(package, ecosystem, fetch=fetch)
+                ids = query_osv(
+                    package, ecosystem, fetch=fetch, timeout_seconds=timeout_seconds
+                )
             except Exception:  # noqa: BLE001 — degrade-and-count (advisor law)
                 errors += 1
                 continue

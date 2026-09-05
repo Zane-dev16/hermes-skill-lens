@@ -1,5 +1,7 @@
 """Fence-safe chat chunk splitting (SPEC §11.3 delivery contract).
 
+Status: shipped reference implementation; not yet wired to a host surface.
+
 §11.3 normative: chat budgets are soft 1200 / hard 1800 chars, and "the
 shared chunker preserves code fences across splits" — a returned string that
 must traverse Discord's 2000-char message cap (≈1900 split reserve) may be

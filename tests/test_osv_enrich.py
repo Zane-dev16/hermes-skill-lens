@@ -115,6 +115,30 @@ def test_non_directory_target_reports_skipped() -> None:
     assert "reason" in enriched["enrichment"]
 
 
+def test_timeout_seconds_bounds_the_default_transport(monkeypatch) -> None:  # noqa: ANN001
+    """``timeout_seconds`` is wired through, not a silently ignored kwarg."""
+    import skill_lens.enrich.osv as osv_mod
+
+    seen: dict[str, float] = {}
+
+    def fake_default_fetch(payload, *, timeout=osv_mod.DEFAULT_TIMEOUT_SECONDS):  # noqa: ANN001, ANN202
+        seen["timeout"] = timeout
+        return {"vulns": []}
+
+    monkeypatch.setattr(osv_mod, "_default_fetch", fake_default_fetch)
+
+    osv_mod.query_osv("pyyaml", "pypi", timeout_seconds=2.5)
+    assert seen["timeout"] == 2.5
+    osv_mod.query_osv("pyyaml", "pypi")  # default rides DEFAULT_TIMEOUT_SECONDS
+    assert seen["timeout"] == osv_mod.DEFAULT_TIMEOUT_SECONDS
+
+    enriched = osv_mod.enrich_envelope(
+        _envelope_for(), root=FIXTURE, timeout_seconds=1.5
+    )
+    assert seen["timeout"] == 1.5
+    assert enriched["enrichment"]["status"] == "ok"
+
+
 def test_input_envelope_not_mutated() -> None:
     envelope = _envelope_for()
     before = canonical_dumps(envelope)

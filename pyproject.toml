@@ -21,6 +21,7 @@ classifiers = [
   "Environment :: Console",
   "Intended Audience :: End Users/Desktop",
   "Operating System :: POSIX",
+  "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -60,6 +61,8 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/Zane-dev16/hermes-skill-lens"
+Repository = "https://github.com/Zane-dev16/hermes-skill-lens"
+Changelog = "https://github.com/Zane-dev16/hermes-skill-lens/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["skill_lens", "skill_lens.engines", "skill_lens.enrich"]
@@ -75,6 +78,7 @@ skill_lens = [
   "rules/core/pack.yaml",
   "rules/core/rules/*.yaml",
   "keys/pack-signing.pub.pem",
+  "py.typed",
 ]
 
 [tool.ruff]

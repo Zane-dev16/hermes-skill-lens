@@ -6,6 +6,43 @@ pack pin together, D-RULEOWN); the rule pack versions independently as
 change = minor + rationale · deprecation ships ≥2 minors before removal).
 Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
 
+## [Unreleased]
+
+### Added
+
+- Core pack 2026.08.10 (patch, +7 rules, 51 total; 65 malicious / 48 benign
+  fixtures): LNS-ING-001 dot-file skip surfacing, LNS-SHL-008 staged
+  download-then-execute, LNS-SHL-009 cross-platform dropper vocab,
+  LNS-PYS-009 urlretrieve staging, LNS-DEP-004 pyproject build-backend
+  hooks, LNS-MAN-009 manifest completeness, LNS-MAN-010 broken resource
+  refs; SHL-001/PYS-005/PYS-007/SHL-004/SHL-006/SEC-001/TXT-004 grammar
+  widenings; decoded-view honesty rewords. Vectors A–G byte-exact, benign
+  floor holds, pack re-signed.
+
+### Changed
+
+- Default scan now shows the claimed-vs-actual diff: an `overreach: N
+  undisclosed` line and `diag:` rows in chat, the full explanation section
+  in the panel, an `options:` fix-suggestion row on each undeclared-capability
+  finding, and machine-readable `overreach` + `diagnostics` slots in `--json`
+  (report/1 additive — existing keys keep exact shape). Suppressed findings
+  no longer accuse.
+- Glanceability pass (render-only; JSON/SARIF/exit codes unchanged): worst
+  finding fused into the headline, `reads:` evidence snippet on the worst
+  finding, `fix:` remediation row on findings, score bar + verdict gloss in
+  the terminal panel, `delta:` score/grade line in diffs, baseline nudge on
+  clean scans, outcome-keyed Impression line (microscopy voice), specimen
+  line in map (microscopy only), self-exam wink on all-OK doctor.
+
+### Fixed
+
+- Bundles with no usable SKILL.md (or hit walk ceilings/encodings) now read
+  as degraded in human output via first-class `diag:` rows instead of a
+  clean-looking report; full detail rides the `diagnostics` envelope slot.
+- Dot-files skipped during ingestion are now surfaced (LNS-ING-DOTFILE /
+  LNS-ING-001) instead of silently unscanned — the dot-file payload bypass
+  is closed.
+
 ## [1.0.0] — v1.0 hardening milestone (2026-08-28)
 
 - v1.0 hardening milestone (SPEC section 13) — SHA-pin community packs + lens console-script + GitHub Action with SARIF upload (D-065); choir.llm downgrade-only LLM second-opinion over ctx.llm, opt-in, outside the canonical envelope (D-066); cross-file taint via import edges in E4/E5 (D-067).
@@ -31,7 +68,7 @@ Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
   parity (rule-pack.yml).
 - Core pack pin travels with v0.9.1 at 2026.08.8 (D-RULEOWN).
 
-## [0.9.0a0] — Phase 5 — governance + release engineering (2026-08-26)
+## [0.9.0] — Phase 5 — governance + release engineering (2026-08-26)
 
 - Rule-pack signing: ed25519 key ceremony (`scripts/sign_core_pack.py`),
   committed public key + detached signature over the canonical pack digest
@@ -61,7 +98,7 @@ Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
   pack; external packs newer than the engine's schema are refused at load,
   D-RULEOWN). Full PR→published drill evidence: build-state/release-drill.md.
 
-## [0.9.0a0] — Phase 4 — triggers, watcher, hub view, doctor (2026-08-26)
+## [0.9.0] — Phase 4 — triggers, watcher, hub view, doctor (2026-08-26)
 
 - Observer trigger lanes (on_skill_lifecycle / post_tool_call self-filtered /
   transform_tool_result append-only notices) with <200 ms cached fast path
@@ -72,7 +109,7 @@ Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
   real exit codes; host-layout import law fixed (all intra-package imports
   relative). DECISIONS D-051–D-054.
 
-## [0.9.0a0] — Phase 3 — corpus, CI, CLI contract (2026-08-25)
+## [0.9.0] — Phase 3 — corpus, CI, CLI contract (2026-08-25)
 
 - Corpus grown to 43 malicious / 33 benign fixtures incl. real-world-derived
   clean-room ports (licensing/provenance gate committed BEFORE fixtures);
@@ -82,7 +119,7 @@ Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
   (vendored OASIS schema); §18 exit-code matrix complete (--fail-on/--plain
   shared grammar). DECISIONS D-045–D-050.
 
-## [0.9.0a0] — Phase 2 — policy, baselines, explain/diff, queue (2026-08-25)
+## [0.9.0] — Phase 2 — policy, baselines, explain/diff, queue (2026-08-25)
 
 - Layered policy engine (§10 resolution order, provenance :Lnn labels,
   severity overrides w/ mandatory reasons + expiry, deny-wins globs/CIDR,
@@ -91,7 +128,7 @@ Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
   weight math; fingerprint-stable diff (insertion-shift proof); single-worker
   scan queue with coalescing + events.ndjson mirror. DECISIONS D-041–D-044.
 
-## [0.9.0a0] — Phase 1/1.5 — engines, scoring, AST lane (2026-08-25)
+## [0.9.0] — Phase 1/1.5 — engines, scoring, AST lane (2026-08-25)
 
 - All eight detection engines (E1 manifest … E8 depintel) over the §17
   Hermes-precedent threat matrix; scoring v2 (tier caps, ceilings, declared/
@@ -99,7 +136,7 @@ Pack-level detail lives in `skill_lens/rules/core/CHANGELOG.md`.
   tree-sitter AST lane with fingerprint-equal degraded fallback; E8 SARIF +
   opt-in OSV enrichment outside the default closure. DECISIONS D-012–D-040.
 
-## [0.9.0a0] — Phase 0 — spine (2026-08-25)
+## [0.9.0] — Phase 0 — spine (2026-08-25)
 
 - Plugin scaffold, SkillIR + canonical JSON writer, ingest walk of
   categorized Hermes skill trees, engine protocol + isolation harness,

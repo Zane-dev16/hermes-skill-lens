@@ -30,30 +30,48 @@ Skill Lens is an **advisor, not a gate**: it registers observer hooks only (`on_
 
 4. **Reading reports**: `/lens report [name]` renders the full report (verdict line,
    findings with evidence citations, score/grade); `--json` and `--sarif` give machine
-   surfaces whose `score.verdict` (+ `needs_review`) is THE automation interface. Every
+   surfaces whose `score.verdict` (+ `needs_review`) is THE automation interface
+   (envelope documented in [docs/json-schema.md](docs/json-schema.md)). Every
    surface ends with a coverage-honesty footer naming the rule-pack version + checksum.
    A clean verdict means "nothing detected", not "safe" — see docs/threat-model.md.
 
-5. **Self-check** when anything looks off: `hermes lens doctor` (nine checks incl.
+5. **Self-check** when anything looks off: `hermes lens doctor` (ten checks incl.
    offline signature verification of the rule pack).
 
-Rule packs travel signed and version-pinned with the plugin (`YYYY.MM.N`,
-SPEC §15). Verify provenance any time: `hermes lens rules verify`. Updates
+Rule packs travel signed and version-pinned with the plugin (`YYYY.MM.N`).
+Verify provenance any time: `hermes lens rules verify`. Updates
 are manual-only by design. Community packs are opt-in and SHA-pinned via
 `.lens/packs.toml` (local-path-only, fail-closed; see `lens rules list`).
 
 ## Standalone CLI (PyPI)
 
 The same engine ships as a zero-dependency pure-Python package with a
-`lens` console script (one grammar, one §18 exit-code law with the host
-lane; the wheel degrades to the golden-tested line-scanner lane without
-grammars — that is the honest contract):
+`lens` console script (one grammar, one exit-code contract shared with
+the host lane; the wheel degrades to the golden-tested line-scanner lane
+without grammars — that is the honest contract):
 
 ```bash
 pip install skill-lens[sig]      # + [ast] for the AST grammar lane
 lens scan ./my-skill --json
 lens scan ./my-skill --fail-on notice --sarif-out lens-results.sarif
 ```
+
+## Exit codes & automation
+
+One exit-code law across `lens scan`, `lens report`, `lens doctor` and
+`lens rules verify` — the same grammar the GitHub Action and the in-session
+slash lane project:
+
+| Verb | 0 | 1 | 2 |
+| --- | --- | --- | --- |
+| `scan` / `report` | completed (advisor stance — findings alone never change the exit code) | only an explicit `--fail-on` breach | total error (malformed policy/baseline config, unresolvable target) |
+| `doctor` | done — warnings allowed | — | any hard check failure |
+| `rules verify` | provenance verified (warnings exit 0) | — | pack REJECTED (checksum/provenance failure) |
+
+For richer automation than one number, `--json` is the interface:
+`score.verdict` (`CLEAN` / `NOTICE` / `WARN` / `ALERT`) plus the boolean
+`score.needs_review` carry the same judgment the exit code projects. See
+[docs/json-schema.md](docs/json-schema.md).
 
 ## CI (GitHub Action)
 
@@ -67,12 +85,15 @@ lens scan ./my-skill --fail-on notice --sarif-out lens-results.sarif
 ```
 
 Writes canonical SARIF, uploads to code scanning (guarded on exit 2), and
-gates on the §18 contract. See `docs/github-action.md`.
+gates on the exit-code contract. See `docs/github-action.md`.
 
 ## Status
 
-v0.9.0a0 — Phases 0–4 gated PASS; Phase 5 (governance + release engineering)
-landed per `PLAN.md` §1. See `CHANGELOG.md`.
+v1.0.0 — hardened for CI: SHA-pinned community packs, a standalone `lens`
+console script on PyPI, a GitHub Action that writes canonical SARIF, and
+cross-file taint detection via import edges. An opt-in LLM second-opinion
+lane ships disabled by default. Core rule pack 2026.08.10 — 51 rules, every
+one backed by malicious + benign fixtures. See `CHANGELOG.md`.
 
 ## Development
 
