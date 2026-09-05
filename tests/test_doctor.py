@@ -31,6 +31,8 @@ from skill_lens.doctor import (
     FORBIDDEN_HOOK,
     PASS,
     WARN,
+    CheckResult,
+    DoctorReport,
     check_network_isolation,
     render_cli_panel,
     render_slash,
@@ -337,6 +339,51 @@ def test_render_cli_panel_box_aligned(wired_view: PluginContextView) -> None:
     widths = {len(line) for line in lines}
     assert len(widths) == 1, f"ragged panel edges: {widths}"
     assert all(line.startswith(("│", "┌", "├", "└")) for line in lines)  # noqa: B011
+
+
+def _all_pass_report() -> DoctorReport:
+    return DoctorReport(
+        checks=[
+            CheckResult(number=n, key=f"k{n}", title=f"check {n}", status=PASS, detail=("fine",))
+            for n in range(1, 11)
+        ],
+        profile="street",
+        pack_version="2026.08.6",
+    )
+
+
+def test_cli_panel_ok_wink_only_when_all_checks_pass() -> None:
+    """Item 9: the self-exam wink rides the CLI panel ONLY on a clean bill."""
+    wink = "next: lens lens — the instrument owes you a self-exam"
+    panel = render_cli_panel(_all_pass_report())
+    assert wink in panel
+    # Box alignment survives the extra row.
+    widths = {len(line) for line in panel.splitlines()}
+    assert len(widths) == 1, f"ragged panel edges: {widths}"
+    # ... and it sits after the verdict row, before the advisor row.
+    lines = panel.splitlines()
+    verdict_at = next(i for i, line in enumerate(lines) if "doctor: OK" in line)
+    wink_at = next(i for i, line in enumerate(lines) if wink in line)
+    advisor_at = next(i for i, line in enumerate(lines) if "advisor only" in line)
+    assert verdict_at < wink_at < advisor_at
+
+
+def test_cli_panel_no_wink_with_warnings_or_failures() -> None:
+    """Item 9: any warning/failure keeps the panel sober — wink suppressed."""
+    wink = "lens lens — the instrument owes you a self-exam"
+    warned = _all_pass_report()
+    warned.checks[3] = CheckResult(
+        number=4, key="environment", title="hermes environment", status=WARN, detail=("stale",)
+    )
+    assert wink not in render_cli_panel(warned)
+    failed = _all_pass_report()
+    failed.checks[0] = CheckResult(
+        number=1, key="rule-pack", title="rule-pack integrity", status=FAIL, detail=("bad",)
+    )
+    assert wink not in render_cli_panel(failed)
+    # The slash lane and the events mirror never carry the wink either.
+    assert wink not in render_slash(_all_pass_report())
+    assert _all_pass_report().verdict_line() == "doctor: OK · profile street · pack 2026.08.6 ✓"
 
 
 def test_render_plain_lane_strips_box_glyphs(wired_view: PluginContextView) -> None:

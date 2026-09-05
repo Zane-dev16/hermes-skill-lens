@@ -346,7 +346,9 @@ def test_slash_and_cli_share_the_hub_verb(tmp_path: Path, monkeypatch: pytest.Mo
     assert "```" in out and "lens scan queued: wired-one" in out
 
     unknown = dispatch_verb("hub extra-arg", view=_view(tmp_path), cache=cache, jobs=manager)
-    assert "usage" in unknown.lower()
+    # hub takes no args: a bare token is named as an unknown verb (a --flag
+    # would render the unknown-flag usage lane instead).
+    assert unknown.startswith("unknown verb 'extra-arg' — try /lens help (verbs: ")
     manager.shutdown()
 
 

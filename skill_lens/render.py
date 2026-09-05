@@ -20,12 +20,15 @@ including slash output; only the fast-path status lines are exempt.
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .canonical import canonical_dumps
+from .claims import BASIS_NO_CLAIMS_MADE
 from .report import report_hash8
 
 #: Byte-frozen coverage footer (SPEC §12.6 — golden tests assert this exact
@@ -120,6 +123,86 @@ FAMILY_ABBREV: dict[str, str] = {
     "spawn.agent": "spawn",
 }
 
+#: Fixed verdict glosses — one per :data:`skill_lens.scoring.VERDICTS` enum,
+#: never derived from data (determinism law). The clean gloss obeys the
+#: "clean ≠ safe" honesty law: it points at the coverage footer and NEVER
+#: says "safe".
+VERDICT_GLOSS: dict[str, str] = {
+    "alert": "examine before installing",
+    "warn": "review before installing",
+    "notice": "worth a skim",
+    "clean": "nothing detected — see coverage footer",
+}
+
+#: Score-bar geometry: 10 cells, filled count a pure function of score.value.
+_BAR_CELLS = 10
+
+#: --plain/NO_COLOR fallback for the bar glyphs (kept OUT of cli._BOX_CHARS,
+#: which this module must not grow; the mapping lives here instead).
+_BAR_ASCII = str.maketrans({"█": "#", "░": "-"})
+
+
+def score_bar(value: Any, *, plain: bool = False) -> str:
+    """Ten-cell bar for a 0–100 score — a pure function of *value*.
+
+    58/100 fills 6 cells (round-half-up); junk degrades to an empty bar.
+    ``plain`` swaps the block glyphs for ``#``/``-`` so --plain/NO_COLOR
+    lanes render ``[######----]`` without touching cli.py's box table.
+    """
+    try:
+        clipped = max(0, min(100, int(value)))
+    except (TypeError, ValueError):
+        clipped = 0
+    # Exact round-half-up in integer arithmetic: float widows (0.15 sits at
+    # 1.4999… in binary) would otherwise land scores like 15 a cell short.
+    filled = max(0, min(_BAR_CELLS, (clipped * _BAR_CELLS + 50) // 100))
+    bar = "█" * filled + "░" * (_BAR_CELLS - filled)
+    if plain:
+        bar = bar.translate(_BAR_ASCII)
+    return f"[{bar}]"
+
+
+def plain_lane(explicit: bool | None = None) -> bool:
+    """--plain/NO_COLOR detection for glyphs OUTSIDE cli._BOX_CHARS.
+
+    Box drawing is translated post-hoc by ``cli.to_ascii_box``; bar and
+    direction glyphs need their ASCII fallback resolved at render time.
+    Reads only env/flag — never target content (§12.1 color-channel law).
+    """
+    if explicit is not None:
+        return explicit
+    if os.environ.get("NO_COLOR"):
+        return True
+    return "--plain" in sys.argv[1:]
+
+
+#: Worst-finding headline clip: keeps the fused headline inside the §12.2
+#: ~80-col discipline with room for the fixed prefixes.
+_WORST_MESSAGE_CLIP = 48
+
+
+def _worst_headline(envelope: Mapping[str, Any]) -> str | None:
+    """``worst :`` headline line for the worst active finding, or None.
+
+    Uses :func:`worst_findings` (the DETERMINISM LAW comparator) — no new
+    ordering; None when there are zero active findings, so headline counts
+    stay true totals.
+    """
+    worst = worst_findings(envelope, 1)
+    if not worst:
+        return None
+    finding = worst[0]
+    eff = str(finding.get("effective_severity") or finding.get("severity") or "LOW")
+    label = SEVERITY_LABELS.get(eff, "○ NOTE")
+    message = " ".join(str(finding.get("message") or finding.get("title", "")).split())
+    if len(message) > _WORST_MESSAGE_CLIP:
+        message = message[: _WORST_MESSAGE_CLIP - 1] + "…"
+    location = finding.get("location") or {}
+    where = str(location.get("path", ""))
+    if location.get("start_line") is not None:
+        where += f":{location['start_line']}"
+    return f"worst : {label} {finding.get('rule_id', '?')} {message} — {where}"
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -187,6 +270,86 @@ def capability_line(envelope: Mapping[str, Any]) -> str:
     return " · ".join(shown) + suffix if shown else "none observed" + suffix
 
 
+def overreach_line(envelope: Mapping[str, Any]) -> str:
+    """``overreach`` header row: undisclosed-capability count + names.
+
+    Always rendered (Wave C): the zero case — ``overreach: 0 undisclosed`` —
+    is itself the signal that every observed capability was declared.
+    Names ride in envelope order (sorted by capability, DETERMINISM LAW).
+    """
+    records = [
+        record for record in (envelope.get("overreach") or ()) if isinstance(record, Mapping)
+    ]
+    if not records:
+        return "overreach: 0 undisclosed"
+    caps = ", ".join(str(record.get("capability", "")) for record in records)
+    return f"overreach: {len(records)} undisclosed — {caps}"
+
+
+#: Diagnostic severities loud enough for human surfaces (info records stay
+#: in the JSON ``diagnostics`` mirror only — they already surface as
+#: findings where they matter, e.g. LNS-ING-001 for dot-file skips).
+_LOUD_DIAGNOSTIC_SEVERITIES = ("error", "warning")
+
+#: Max diagnostic rows before the overflow pointer (fixed: determinism).
+_DIAGNOSTIC_ROW_CAP = 5
+
+#: Diagnostic message clip (§12.2 snippet discipline).
+_DIAGNOSTIC_CLIP = 100
+
+
+def diagnostics_lines(envelope: Mapping[str, Any], *, cap: int = _DIAGNOSTIC_ROW_CAP) -> list[str]:
+    """First-class ingest/engine diagnostic rows (DX law: never clean-looking).
+
+    A bundle whose manifest is missing (``LNS-ING-MANIFEST``) or whose
+    walk hit ceilings/encodings must read as degraded in human output —
+    never as a clean bill. Each row names code + severity + message + path.
+    """
+    loud = [
+        record
+        for record in (envelope.get("diagnostics") or ())
+        if isinstance(record, Mapping)
+        and str(record.get("severity", "")).lower() in _LOUD_DIAGNOSTIC_SEVERITIES
+    ]
+    rows: list[str] = []
+    for record in loud[:cap]:
+        message = " ".join(str(record.get("message", "")).split())
+        if len(message) > _DIAGNOSTIC_CLIP:
+            message = message[: _DIAGNOSTIC_CLIP - 1] + "…"
+        text = (
+            f"diag    : {record.get('code', '?')} "
+            f"{str(record.get('severity', '')).lower()} — {message}"
+        )
+        where = str(record.get("path") or "")
+        if where:
+            text += f" [{where}]"
+        rows.append(text)
+    if len(loud) > cap:
+        rows.append(f"… {len(loud) - cap} more diagnostics in --json")
+    return rows
+
+
+def _overreach_panel_lines(envelope: Mapping[str, Any]) -> list[str]:
+    """§9.3 explanation blocks for the terminal panel (Wave C).
+
+    Reuses the envelope's pre-rendered ``explanation`` slots — the exact
+    human text --json consumers get, with zero recomputation so panel and
+    machine bytes can never drift. Empty when nothing is undisclosed.
+    Rows are clipped to the panel interior by the caller (``cell``).
+    """
+    records = [
+        record for record in (envelope.get("overreach") or ()) if isinstance(record, Mapping)
+    ]
+    rows: list[str] = []
+    for record in records:
+        explanation = str(record.get("explanation") or "")
+        if explanation:
+            rows.extend(explanation.splitlines())
+        else:  # honest skeleton when the template slot is absent
+            rows.append(f"OVERREACH: {record.get('capability', '?')} ({record.get('basis', '?')})")
+    return rows
+
+
 def _patient_line(envelope: Mapping[str, Any]) -> str:
     provenance = envelope.get("provenance") or {}
     name = _display_name(str((envelope.get("target") or {}).get("name", "?")))
@@ -200,14 +363,61 @@ def _bundle_line(envelope: Mapping[str, Any]) -> str:
     hash_text = str(target.get("bundle_hash") or "unhashed")
     if hash_text.startswith("sha256:") and len(hash_text) > len("sha256:") + 4:
         hash_text = f"sha256:{hash_text[7:10]}…{hash_text[-3:]}"
-    kb = max(1, round(int(target.get("total_bytes") or 0) / 1024))
+    try:
+        total_bytes = int(target.get("total_bytes") or 0)
+    except (TypeError, ValueError):
+        total_bytes = 0  # junk size degrades, never raises
+    kb = max(1, round(total_bytes / 1024))
     policy = str((envelope.get("policy") or {}).get("profile", "street"))
     return (
         f"bundle  : {hash_text} · {target.get('file_count', 0)} files · {kb} KB · policy {policy}"
     )
 
 
-def _finding_block(finding: Mapping[str, Any]) -> list[str]:
+#: Row clips for the finding block (§12.2 ~80-col snippet/message discipline):
+#: the evidence snippet stays ≤76 chars; remediation is author guidance, so
+#: it gets a wider column but still clips with a greppable ellipsis.
+_EVIDENCE_CLIP = 76
+_REMEDIATION_CLIP = 100
+
+#: Fix-suggestion row clip: mirrors the remediation column (the §6 template
+#: line — fix + suppress-with-fingerprint + remove — runs ~100 chars).
+_OVERREACH_OPTIONS_CLIP = 100
+
+
+def _overreach_options_row(finding: Mapping[str, Any]) -> str | None:
+    """``options:`` fix-suggestion row for overreach findings, else None.
+
+    Keys off the additive ``overreach_basis`` slot report.py stamps on
+    findings evidencing an undeclared capability (policy-and-claims §6
+    template, per-instance): fix wording depends on the basis — vague
+    bundles get the frontmatter-declaration ask, contradicted claims get
+    the description fix + capability name — then the deterministic
+    suppress-with-fingerprint and remove-skill closes. Findings without
+    the slot render no row, so non-overreach bytes stay byte-identical.
+    Pure function of finding fields (capability, basis, fingerprint) —
+    no wall-clock, no randomness; clipped with a greppable ellipsis.
+    """
+    basis = finding.get("overreach_basis")
+    if not basis:
+        return None
+    capability = str(finding.get("capability") or "").strip()
+    fingerprint = str(finding.get("fingerprint") or "")
+    if fingerprint.startswith("sha256:") and len(fingerprint) > len("sha256:") + 4:
+        short = fingerprint[len("sha256:") :][:4] + "…"
+    else:
+        short = fingerprint[:8] or "?"
+    if str(basis) == BASIS_NO_CLAIMS_MADE or not capability:
+        fix = "declare capabilities in frontmatter"
+    else:
+        fix = f"fix the description + declare {capability}"
+    text = f"options: {fix} · suppress w/ reason (fingerprint {short}) · remove skill"
+    if len(text) > _OVERREACH_OPTIONS_CLIP:
+        text = text[: _OVERREACH_OPTIONS_CLIP - 1] + "…"
+    return f"      {text}"
+
+
+def _finding_block(finding: Mapping[str, Any], *, with_evidence: bool = False) -> list[str]:
     eff = str(finding.get("effective_severity") or finding.get("severity") or "LOW")
     label = SEVERITY_LABELS.get(eff, "○ NOTE")
     message = str(finding.get("message") or finding.get("title", ""))
@@ -220,11 +430,33 @@ def _finding_block(finding: Mapping[str, Any]) -> list[str]:
     if location.get("start_line") is not None:
         where += f":{location['start_line']}"
     declared_word = "declared" if finding.get("declared") else "UNDECLARED"
+    try:
+        confidence = float(finding.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0  # junk confidence degrades, never raises
     detail = (
-        f"      {where} — {finding.get('capability', '')}"
-        f" · {declared_word} · conf {float(finding.get('confidence', 0.0)):.2f}"
+        f"      {where} — {finding.get('capability', '')} · {declared_word} · conf {confidence:.2f}"
     )
     lines.append(detail)
+    if with_evidence:
+        # The worst block only: quote the evidence the pipeline already
+        # carried home (envelope `location.snippet`) — never a fresh read.
+        snippet = " ".join(str(location.get("snippet", "")).split())
+        if snippet:
+            if len(snippet) > _EVIDENCE_CLIP:
+                snippet = snippet[: _EVIDENCE_CLIP - 1] + "…"
+            lines.append(f"      reads : {snippet}")
+    remediation = " ".join(str(finding.get("remediation", "")).split())
+    if remediation:
+        # Author-facing fix row: every finding carries remediation from the
+        # rule pack; dropping it here used to waste the single most useful
+        # field for skill authors. Label column matches the reads/where rows.
+        if len(remediation) > _REMEDIATION_CLIP:
+            remediation = remediation[: _REMEDIATION_CLIP - 1] + "…"
+        lines.append(f"      fix   : {remediation}")
+    options_row = _overreach_options_row(finding)
+    if options_row is not None:
+        lines.append(options_row)
     return lines
 
 
@@ -293,8 +525,21 @@ def _chat_body(
         _bundle_line(envelope),
         f"grade   : {score.get('grade', '?')} {score.get('value', '?')}/100"
         f" · verdict {str(score.get('verdict', '?')).upper()}",
-        f"caps    : {capability_line(envelope)}",
     ]
+    # Headline fusion: the single worst active finding rides in the header
+    # (count lines stay true totals; suppressed-only scans show no worst).
+    worst = _worst_headline(envelope)
+    if worst is not None:
+        header_lines.append(worst)
+    header_lines.append(f"caps    : {capability_line(envelope)}")
+    # Wave C: the claimed-vs-actual diff is a first-class header row — the
+    # zero case ("overreach: 0 undisclosed") is itself the signal that
+    # every observed capability was declared.
+    header_lines.append(overreach_line(envelope))
+    # DX #11: ingest/engine validation errors must never read as a clean
+    # scan — loud diagnostics ride the header; the full deterministic
+    # mirror stays in the envelope ``diagnostics`` key (--json).
+    header_lines.extend(diagnostics_lines(envelope))
     flag_line = None
     if score.get("needs_review"):
         flag_line = "flag    : needs_review — low-confidence HIGH+ evidence; triage first"
@@ -304,19 +549,28 @@ def _chat_body(
     suppressed_total = sum(1 for f in envelope.get("findings", ()) if f.get("suppressed", False))
     if active:
         finding_lines.append(f"findings: {counts_phrase(envelope)}")
-        for finding in worst_findings(envelope, worst_count):
-            block = _finding_block(finding)
+        for index, finding in enumerate(worst_findings(envelope, worst_count)):
+            # Evidence snippet rides ONLY the first (worst) block — every
+            # block would blow the chat budget for repetitive bundles.
+            block = _finding_block(finding, with_evidence=index == 0)
             if spoilers and len(block) > 1:
                 # Wrap ONLY the evidence detail row (location · capability ·
-                # confidence); the severity/rule head stays visible so the
-                # reader knows there is something behind the tap.
+                # confidence) plus the worst block's snippet row; the
+                # severity/rule head stays visible so the reader knows there
+                # is something behind the tap.
                 block[1] = "      " + spoiler_wrap(block[1].lstrip())
+                if index == 0 and len(block) > 2 and block[2].lstrip().startswith("reads :"):
+                    block[2] = "      " + spoiler_wrap(block[2].lstrip())
             finding_lines.extend(block)
         hidden = len(active) - min(worst_count, len(active))
         if hidden > 0:
             finding_lines.append(f"… {hidden} more in the full report")
     else:
-        finding_lines.append("findings: none")
+        # Clean-scan nudge: a clean slide is worth filing — make the next
+        # action copy-pasteable while the literal `findings: none` prefix
+        # stays byte-exact (tests pin it).
+        name = _display_name(str((envelope.get("target") or {}).get("name", "")) or "?")
+        finding_lines.append(f'findings: none · lock it in: /lens baseline {name} --reason "…"')
     if suppressed_total:
         # Machine visibility law (PLAN Phase 2 exit): suppressed findings are
         # never silently dropped — chat shows the count, the JSON record
@@ -422,7 +676,13 @@ def fast_line_ok(
     cached_seconds: int | None = None,
 ) -> str:
     """Format A — cache hit."""
-    age = f" · cached {max(0, int(cached_seconds))}s ago" if cached_seconds is not None else ""
+    try:
+        age_seconds: int | None = (
+            max(0, int(cached_seconds)) if cached_seconds is not None else None
+        )
+    except (TypeError, ValueError):
+        age_seconds = None  # junk age degrades, never raises
+    age = f" · cached {age_seconds}s ago" if age_seconds is not None else ""
     return _clip_fast_line(
         f"lens ok {name} · {grade} {value}/100 · {verdict}"
         + (f" · {counts}" if counts else "")
@@ -466,14 +726,17 @@ def fast_line_fail(*, name: str, reason: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def render_terminal_panel(envelope: Mapping[str, Any]) -> str:
+def render_terminal_panel(envelope: Mapping[str, Any], *, plain: bool | None = None) -> str:
     """Box-drawing TTY panel (§12.1 layout, ASCII-safe fallback content).
 
     Color arrives with the CLI verbs phase via Rich; this function stays
     ANSI-free so ``NO_COLOR``/--plain audits hold by construction. Not
     wired to slash surfaces — §11.3 forbids anything but the compact fence
-    there.
+    there. *plain* (None = auto-detect via :func:`plain_lane`) swaps the
+    score-bar glyphs to ASCII; box drawing itself keeps riding the
+    ``cli.to_ascii_box`` translation on the --plain/NO_COLOR lane.
     """
+    plain = plain_lane(plain)
     score = envelope.get("score") or {}
     target = envelope.get("target") or {}
     width = 80
@@ -482,20 +745,43 @@ def render_terminal_panel(envelope: Mapping[str, Any]) -> str:
     def row(text: str) -> str:
         return f"│ {text.ljust(width - 4)} │"
 
+    def cell(text: str) -> str:
+        """Clip one row's content to the panel interior (new rows only)."""
+        return text if len(text) <= width - 4 else text[: width - 5] + "…"
+
+    verdict_raw = str(score.get("verdict", "?"))
+    gloss = VERDICT_GLOSS.get(verdict_raw.lower())
+    bar_head = (
+        f"score {score_bar(score.get('value'), plain=plain)} "
+        f"{score.get('value', '?')}/100 · verdict {verdict_raw.upper()}"
+    )
+    bar_rows = [f"{bar_head} — {gloss}"] if gloss else [bar_head]
+    if gloss and len(bar_rows[0]) > width - 4:
+        # Long gloss (clean) wraps to an indented continuation row rather
+        # than clipping the honesty tail or ragged-ing the box edge.
+        bar_rows = [bar_head, f"        — {gloss}"]
+
     lines = [
         f"┌{title.center(width - 2, '─')}┐",
         row(_patient_line(envelope).replace("patient :", "patient  ")),
         row(_bundle_line(envelope).replace("bundle  :", "bundle   ")),
         f"├{'─' * (width - 2)}┤",
-        row(
-            f"GRADE {score.get('grade', '?')} {score.get('value', '?')}/100"
-            f"      VERDICT: {str(score.get('verdict', '?')).upper()}"
-        ),
+        *(row(cell(bar_row)) for bar_row in bar_rows),
+    ]
+    worst = _worst_headline(envelope)
+    if worst is not None:
+        lines.append(row(cell(worst)))
+    lines += [
         row(f"capabilities {capability_line(envelope)}"),
+        row(cell(overreach_line(envelope))),
+        *(row(cell(line)) for line in diagnostics_lines(envelope)),
         f"├{'─' * (width - 2)}┤",
     ]
     for finding in worst_findings(envelope, 12):
-        lines.extend(row(line) for line in _finding_block(finding))
+        lines.extend(row(cell(line)) for line in _finding_block(finding))
+    # Wave C overreach section: §9.3 explanations ride the envelope
+    # pre-rendered (zero recomputation, bytes identical to --json).
+    lines.extend(row(cell(line)) for line in _overreach_panel_lines(envelope))
     autopsy = _display_name(str(target.get("name", "")))
     lines += [
         f"├{'─' * (width - 2)}┤",
@@ -515,18 +801,23 @@ __all__ = [
     "FAST_LINE_MAX_CHARS",
     "FAMILY_ABBREV",
     "SEVERITY_LABELS",
+    "VERDICT_GLOSS",
     "WORST_N_DEFAULT",
     "WORST_N_OVER_BUDGET",
     "capability_line",
     "counts_phrase",
+    "diagnostics_lines",
     "fast_line_fail",
     "fast_line_coalesced",
     "fast_line_ok",
     "fast_line_scan_queued",
     "fast_line_skip",
+    "overreach_line",
     "persist_full_text",
+    "plain_lane",
     "render_chat_compact",
     "render_terminal_panel",
+    "score_bar",
     "spoiler_wrap",
     "worst_findings",
 ]

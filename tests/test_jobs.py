@@ -34,23 +34,11 @@ from skill_lens.jobs import (
     JobRecord,
     ScanContext,
 )
-from tests.conftest import FakePluginContext
+from tests.conftest import FakePluginContext, _write_bundle
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _write_bundle(root: Path, name: str = "demo-skill") -> Path:
-    """Minimal benign bundle (fast engines, deterministic shape)."""
-    bundle = root / name
-    bundle.mkdir(parents=True, exist_ok=True)
-    (bundle / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: Supercharges synergy quietly.\n"
-        "disable-model-invocation: true\n---\n\nbody\n",
-        encoding="utf-8",
-    )
-    return bundle
 
 
 class _Counter:
@@ -246,7 +234,8 @@ def test_failure_records_one_line_reason_and_never_retries(tmp_path: Path) -> No
     assert "\n" not in (final.error or "")
     assert final.attempts == 1
     manager._queue.join()  # queue fully drained — nothing pending
-    time.sleep(0.05)
+    # task_done fires only after _execute returns, so the counter is final at
+    # join: any buggy retry would still be queued and the join would wait for it.
     assert counter.count == 1, "no silent retries after failure"
     # The D-format mirror lands in events.ndjson.
     events = manager.events_path.read_text(encoding="utf-8").splitlines()
@@ -420,7 +409,13 @@ def test_enqueue_after_shutdown_refuses_new_work(tmp_path: Path) -> None:
     decision = manager.enqueue(name="late", target=tmp_path, bundle_hash="sha256:" + "dd" * 32)
     assert manager.worker_thread is None
     assert decision.job.state == STATE_QUEUED  # persisted honestly, never runs silently
-    time.sleep(0.05)
+    # No worker exists; grant any (buggy) post-shutdown processing a bounded
+    # grace window to show itself, then require the job to still be QUEUED.
+    grace = time.monotonic() + 0.05
+    while time.monotonic() < grace:
+        if manager.snapshot_job(decision.job.job_id).state != STATE_QUEUED:
+            break
+        time.sleep(0.01)
     assert manager.snapshot_job(decision.job.job_id).state == STATE_QUEUED
 
 
@@ -559,7 +554,8 @@ def test_slash_scan_cold_queues_then_report_pulls(tmp_path: Path) -> None:
     assert "· sha256 " in answer
 
     compact = None
-    for _ in range(300):
+    deadline = _time.monotonic() + 10.0
+    while _time.monotonic() < deadline:
         compact = handler(f'report "{bundle.name}"')
         if not compact.startswith(("lens scan queued:", "no lens report")):
             break
@@ -596,7 +592,8 @@ def test_slash_report_surfaces_failed_job_reason(tmp_path: Path) -> None:
     handler, _ctx = _handler(tmp_path, FastPathCache(), _manager(tmp_path, runner=runner))
     assert handler(f'scan "{bundle}"').startswith("lens scan queued:")
     line = None
-    for _ in range(200):
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
         line = handler(f'report "{bundle.name}"')
         if line.startswith("lens fail "):
             break

@@ -891,6 +891,61 @@ def _because_clause(capability_path: str) -> str:
     return BECAUSE_CLAUSES.get(family, _DEFAULT_BECAUSE)
 
 
+def because_clause(capability_path: str) -> str:
+    """Public seam for the §9.3 ``because`` clause (render layer).
+
+    Pure function of the capability path — same table the template uses,
+    so panel/chat rows can never drift from the envelope explanation.
+    """
+    return _because_clause(capability_path)
+
+
+def overreach_record_to_dict(
+    record: OverreachRecord,
+    finding_ids: Iterable[str],
+) -> dict[str, Any]:
+    """JSON-safe envelope form of one overreach record (report/1 additive).
+
+    Carries the §9.3 template pre-rendered as ``explanation`` (SPEC: every
+    number traces, T3) alongside the structured slots it was rendered
+    from, so ``--json`` consumers get both machine slots and the exact
+    human text with zero recomputation. Deterministic: ids sorted.
+    """
+    claim_block: dict[str, Any] | None = None
+    if record.claim is not None:
+        claim_block = {
+            "id": record.claim.id,
+            "capability": record.claim.capability,
+            "quote": record.claim.span.quote,
+            "path": record.claim.span.path,
+            "line": record.claim.span.line,
+        }
+    evidence_block: dict[str, Any] | None = None
+    if record.evidence is not None:
+        evidence_block = {
+            "path": record.evidence.path,
+            "line": record.evidence.line,
+            "snippet": record.evidence.snippet,
+        }
+    weight_block: dict[str, Any] | None = None
+    if record.weight is not None:
+        weight_block = {
+            "points": record.weight.points,
+            "severity": record.weight.severity,
+            "dynamic": record.weight.dynamic,
+            "declared": record.weight.declared,
+        }
+    return {
+        "capability": record.capability,
+        "basis": record.basis,
+        "claimed": claim_block,
+        "evidence": evidence_block,
+        "weight": weight_block,
+        "finding_ids": sorted(str(item) for item in finding_ids),
+        "explanation": explain_overreach(record),
+    }
+
+
 def _loc(path: str, line: int | None) -> str:
     return f"{path}:{line}" if line is not None else path
 
@@ -1092,6 +1147,7 @@ __all__ = [
     "OverreachRecord",
     "WeightNote",
     "LexiconExtractor",
+    "because_clause",
     "build_overreach_reports",
     "compute_overreach",
     "description_states_concrete_capability",
@@ -1101,6 +1157,7 @@ __all__ = [
     "extract_lexicon_claims",
     "finding_fingerprint",
     "is_declared",
+    "overreach_record_to_dict",
     "parse_capability",
     "render_overreach_section",
     "run_claim_stage",

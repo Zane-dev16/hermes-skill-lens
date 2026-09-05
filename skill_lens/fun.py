@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -77,7 +77,7 @@ _SELF_SCAN_GAG_TAIL = "(Yes, we ran it on ourselves. That's the point.)"
 # ---------------------------------------------------------------------------
 
 
-def _setting(view: Any, key: str) -> Any:
+def setting(view: Any, key: str) -> Any:
     """Read + coerce one plugin setting; any failure degrades to unset."""
     if view is None:
         return None
@@ -102,10 +102,10 @@ def validate_voice_choice(choice: str | None) -> str | None:
     if choice in VOICES:
         return None
     if choice in DEFERRED_VOICES:
-        return (
-            f"voice {choice!r} is deferred (usage-gated; HARD_QUESTIONS O4) — "
-            f"shipped voices: {', '.join(VOICES)}"
-        )
+        # Internal designation (never user copy): noir is usage-gated per
+        # HARD_QUESTIONS O4 — the rationale lives here, where authors never
+        # read it; the notice itself states only the fact and the way out.
+        return f"voice {choice!r} is deferred — shipped voices: {', '.join(VOICES)}"
     return f"unknown voice {choice!r} — shipped voices: {', '.join(VOICES)}"
 
 
@@ -118,8 +118,10 @@ def resolve_voice(view: Any, flag_value: str | None = None) -> tuple[str, str | 
     beat per-invocation flags — that is what makes it a kill-switch).
     *flag_value* must already pass :func:`validate_voice_choice`.
     """
-    kill = _setting(view, KILLSWITCH_KEY)
-    if kill is False:
+    kill = setting(view, KILLSWITCH_KEY)
+    # Exact-False pin (not falsiness): an unset/empty setting must NOT trip
+    # the kill-switch — only a real boolean False from the policy layer.
+    if type(kill) is bool and not kill:
         if flag_value is not None and flag_value != DEFAULT_VOICE:
             return (
                 DEFAULT_VOICE,
@@ -129,7 +131,7 @@ def resolve_voice(view: Any, flag_value: str | None = None) -> tuple[str, str | 
         return DEFAULT_VOICE, None
     if flag_value is not None:
         return flag_value, None
-    configured = _setting(view, VOICE_SETTING_KEY)
+    configured = setting(view, VOICE_SETTING_KEY)
     if isinstance(configured, str) and configured in VOICES:
         return configured, None
     return DEFAULT_VOICE, None
@@ -156,6 +158,10 @@ def _autopsy_rows(envelope: Mapping[str, Any]) -> list[dict[str, Any]]:
             where += f":{line}"
         snippet = " ".join(str(location.get("snippet", "")).split())
         declared_word = "declared" if finding.get("declared") else "UNDECLARED"
+        try:
+            confidence = float(finding.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0  # junk confidence degrades, never raises
         rows.append(
             {
                 "id": str(finding.get("id", "")),
@@ -165,7 +171,7 @@ def _autopsy_rows(envelope: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "where": where,
                 "capability": str(finding.get("capability", "")),
                 "declared": declared_word,
-                "confidence": float(finding.get("confidence", 0.0)),
+                "confidence": confidence,
                 "snippet": snippet[:80],
             }
         )
@@ -214,6 +220,25 @@ def _microscopy_block(index: int, row: Mapping[str, Any]) -> list[str]:
     return [sentence]
 
 
+def _microscopy_impression(rows: Sequence[Mapping[str, Any]]) -> str:
+    """Deterministic Impression line by outcome band (microscopy voice).
+
+    Bands: clean slide / one lesion of consequence (a single HIGH+) /
+    solitary blemish (a single MED/LOW) / catalogued foci (many). Pure
+    function of count + top severity — no wall-clock, no randomness — and
+    carrying no rule ids, severity words, paths, or confidences, so the
+    cross-voice fact-equality pin (tests/test_autopsy_voices.py) holds by
+    construction.
+    """
+    if not rows:
+        return "Impression: fields unremarkable. A clean slide is still a slide worth filing."
+    if len(rows) == 1:
+        if str(rows[0].get("severity", "")) in ("CRITICAL", "HIGH"):
+            return "Impression: one lesion of consequence; treat before transplant."
+        return "Impression: a solitary blemish of little consequence; file and observe."
+    return f"Impression: {len(rows)} foci catalogued; excise in severity order."
+
+
 def render_autopsy(
     envelope: Mapping[str, Any],
     *,
@@ -233,7 +258,10 @@ def render_autopsy(
     if soft_budget is None:
         soft = CHAT_SOFT_BUDGET
     else:
-        soft = max(200, min(int(soft_budget), CHAT_HARD_BUDGET))
+        try:
+            soft = max(200, min(int(soft_budget), CHAT_HARD_BUDGET))
+        except (TypeError, ValueError):
+            soft = CHAT_SOFT_BUDGET  # junk budget degrades, never raises
 
     def body_for(count: int, pointer: str | None) -> str:
         sections = ["\n".join(_autopsy_head(envelope, voice))]
@@ -241,8 +269,11 @@ def render_autopsy(
         if voice == "microscopy":
             for index, row in enumerate(rows[:count]):
                 blocks.extend(_microscopy_block(index, row))
-            if count and count >= len(rows) and rows:
-                blocks.append("Impression: findings as listed. Recommend higher magnification.")
+            if count >= len(rows):
+                # Full render only: the Impression closes the dictation,
+                # keyed on the outcome band (count + top severity) — never
+                # per-finding prose. Collapsed rungs keep head + pointer.
+                blocks.append(_microscopy_impression(rows))
         else:
             for row in rows[:count]:
                 blocks.extend(_clinical_block(row))
@@ -456,6 +487,7 @@ __all__ = [
     "render_self_scan",
     "resolve_voice",
     "self_scan_mirror",
+    "setting",
     "top_level_groups",
     "validate_voice_choice",
 ]

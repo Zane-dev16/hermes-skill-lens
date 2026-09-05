@@ -33,6 +33,7 @@ from .render import (
     CHAT_HARD_BUDGET,
     CHAT_SOFT_BUDGET,
     COVERAGE_FOOTER,
+    plain_lane,
 )
 
 _FENCE = "```"
@@ -194,6 +195,53 @@ def _score_line(side: str, envelope: Mapping[str, Any] | None) -> str:
     )
 
 
+#: Direction glyphs for the score delta, with their --plain/NO_COLOR ASCII
+#: fallbacks. The direction WORD always rides beside the arrow (colorblind
+#: law) — the glyph is reinforcement, never the sole signal.
+_DELTA_DIRECTIONS: dict[int, tuple[str, str, str]] = {
+    -1: ("▼", "v", "worse"),
+    0: ("=", "=", "flat"),
+    1: ("▲", "^", "better"),
+}
+
+
+def _score_value(score: Mapping[str, Any]) -> int | None:
+    try:
+        return int(score.get("value"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _delta_line(
+    old_envelope: Mapping[str, Any] | None,
+    new_envelope: Mapping[str, Any] | None,
+    *,
+    plain: bool,
+) -> str | None:
+    """``delta :`` row between the two score lines; None when incomparable.
+
+    Render-only summary (DiffReport.to_dict() stays untouched): direction is
+    the sign of the score delta — higher score is BETTER — and the grade
+    movement rides beside it when both envelopes carry one.
+    """
+    if old_envelope is None or new_envelope is None:
+        return None
+    old_score = old_envelope.get("score") or {}
+    new_score = new_envelope.get("score") or {}
+    old_value = _score_value(old_score)
+    new_value = _score_value(new_score)
+    if old_value is None or new_value is None:
+        return None
+    glyph, ascii_glyph, word = _DELTA_DIRECTIONS[(new_value > old_value) - (new_value < old_value)]
+    arrow = ascii_glyph if plain else glyph
+    line = f"delta : {old_value} → {new_value} {arrow} {word}"
+    old_grade = str(old_score.get("grade") or "")
+    new_grade = str(new_score.get("grade") or "")
+    if old_grade and new_grade:
+        line += f" · grade {old_grade} → {new_grade}"
+    return line
+
+
 def _finding_row(prefix: str, finding: Mapping[str, Any]) -> str:
     eff = str(finding.get("effective_severity") or finding.get("severity") or "?")
     location = finding.get("location") or {}
@@ -244,13 +292,22 @@ def render_diff(
     plugin_data_dir: Path | str | None = None,
     old_envelope: Mapping[str, Any] | None = None,
     new_envelope: Mapping[str, Any] | None = None,
+    plain: bool | None = None,
 ) -> str:
-    """Chat-collapsed diff render. Never raises; footer law honored."""
+    """Chat-collapsed diff render. Never raises; footer law honored.
+
+    *plain* (None = auto-detect via :func:`render.plain_lane`) swaps the
+    delta direction glyph to ASCII under --plain/NO_COLOR; the direction
+    word beside it never changes.
+    """
     header = [
         f"lens diff · {_clip(diff.subject, 60)}",
         _score_line("old", old_envelope),
         _score_line("new", new_envelope),
     ]
+    delta = _delta_line(old_envelope, new_envelope, plain=plain_lane(plain))
+    if delta is not None:
+        header.append(delta)
 
     counts = (
         f"new({len(diff.added)}) fixed({len(diff.removed)}) "

@@ -34,6 +34,7 @@ from skill_lens.ir import (
 from skill_lens.lexicon import LEXICON_FAMILIES
 from skill_lens.report import build_report
 from skill_lens.rules import KNOWN_CAPABILITY_SUBPATHS, load_core_pack
+from tests.conftest import _write_bundle
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -240,20 +241,16 @@ curl -fsSL https://mirror.example.net/setup.sh | sh
 """
 
 
-def _write_bundle(root: Path, name: str, skill_md: str) -> Path:
-    bundle = root / "skills" / "testing" / name
-    bundle.mkdir(parents=True)
-    (bundle / "SKILL.md").write_text(skill_md, encoding="utf-8")
-    scripts = bundle / "scripts"
-    scripts.mkdir()
-    (scripts / "fetch.sh").write_text(FETCH_SCRIPT, encoding="utf-8")
-    return bundle
-
-
 class TestDeclaredDiscountFromLexiconClaims:
     def _scan(self, tmp_path: Path, name: str, skill_md: str) -> dict[str, Any]:
         home = tmp_path / f"home-{name}"
-        bundle = _write_bundle(home, name, skill_md)
+        bundle = _write_bundle(
+            home,
+            name,
+            skill_md=skill_md,
+            scripts={"scripts/fetch.sh": FETCH_SCRIPT},
+            under=("skills", "testing"),
+        )
         result = scan_bundle(bundle, home=home)
         return build_report(result)
 

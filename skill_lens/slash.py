@@ -77,11 +77,12 @@ verbs:
   autopsy <name> [--voice clinical|microscopy]
                        deep narrative walkthrough of the latest report;
                        voices are OPT-IN (default clinical stays sober;
-                       noir is deferred — HARD_QUESTIONS O4)
+                       noir is deferred)
   baseline <name> --reason "…" [--expires DATE]
                        record current fingerprints into <skill>/.lens/baseline.toml
   explain-rules [--rule ID]
                        effective rule set + provenance; single-rule detail card
+                       (`explain` works as an alias)
   diff <reportA|name> [<reportB|name>]
                        shift-stable fingerprint comparison (new/fixed/persisted)
   hub                  review bundles staged in skills/.hub/quarantine — role labels
@@ -90,7 +91,7 @@ verbs:
                        out-of-band drift watcher: sweep-on-start is always on;
                        start/stop toggle the opt-in continuous poller
   rules verify [path]  offline provenance check of the embedded core pack
-                       against the committed ed25519 pubkey (§15); a path
+                       against the committed ed25519 pubkey; a path
                        verifies an external/community pack instead; no-arg
                        also reports the .lens/packs.toml pin table (one line
                        per pack)
@@ -99,7 +100,7 @@ verbs:
   second-opinion [name] [--json]
                        LLM second opinion on the latest report (opt-in;
                        requires policy [choir] enabled = true)
-  doctor               ten-check §11.9 self-check: pack, policy, state dirs,
+  doctor               ten-check self-check: pack, policy, state dirs,
                        host env, wiring audit (zero blocking hooks), network
                        isolation, lifecycle, parse, render, choir — verdict line last
   help                 this block
@@ -109,7 +110,7 @@ also hiding: /lens bones · /lens lens   (easter eggs; opt-in by invocation)
 flags (scan): --json · --no-cache · --sarif (SARIF 2.1.0 fence) ·
 --sarif-out FILE (raw canonical SARIF, atomic write; machine lane) · --osv or
 osv:true (OPT-IN network enrichment via OSV.dev; findings tagged enriched) ·
---fail-on clean|notice|warn|alert (CLI exit-code gate; §8.4/§18) ·
+--fail-on clean|notice|warn|alert (CLI exit-code gate) ·
 --plain (ASCII headers, box drawing stripped)
 also: report --fail-on/--sarif-out/--plain · diff --plain · diff --plain
 
@@ -121,7 +122,7 @@ _RULES_USAGE = """\
 usage: /lens rules list [dir] | rules verify [path] [--sig FILE] [--pubkey FILE]
 
 No path: verify the embedded core pack against the committed
-ed25519 public key and detached signature (offline; SPEC §15),
+ed25519 public key and detached signature (offline),
 then report every .lens/packs.toml pin (one line per pack:
 pass/rejected + reason). With path: structurally load an
 external/community pack and report its version + content
@@ -1057,9 +1058,9 @@ def _chat_soft_budget(view: PluginContextView | None) -> int | None:
     CHAT_HARD_BUDGET); cached artifacts keep the budget they were rendered
     under — documented courtesy-setting semantics, DECISIONS D-056.
     """
-    from .fun import _setting
+    from .fun import setting
 
-    raw = _setting(view, "chat_budget_chars")
+    raw = setting(view, "chat_budget_chars")
     try:
         return int(raw) if isinstance(raw, int) and raw > 0 else None
     except (TypeError, ValueError):  # defensive: never let a junk setting crash the verb
@@ -1146,7 +1147,7 @@ def _verb_autopsy(args: list[str], *, view: PluginContextView, cache: FastPathCa
     if len(positional) != 1:
         return (
             "usage: /lens autopsy <name> [--voice clinical|microscopy] — voices are "
-            "opt-in; clinical (default) stays sober; noir is deferred (HQ O4)"
+            "opt-in; clinical (default) stays sober; noir is deferred)"
         )
     from .fun import render_autopsy, resolve_voice, validate_voice_choice
 
@@ -1263,6 +1264,29 @@ def _verb_self_scan(args: list[str], *, view: PluginContextView) -> str:  # noqa
 # ---------------------------------------------------------------------------
 
 
+#: Verbs advertised in the unknown-verb hint. Hidden easter eggs (``bones``,
+#: ``lens``) stay unlisted, and ``help`` is the pointer itself (F-6).
+_PUBLIC_VERBS = (
+    "scan",
+    "report",
+    "map",
+    "hub",
+    "watch",
+    "doctor",
+    "rules",
+    "baseline",
+    "explain-rules",
+    "diff",
+    "autopsy",
+    "second-opinion",
+)
+
+
+def _unknown_verb_line(verb: str) -> str:
+    """Unrecognized-verb hint: name the noun honestly and list the verbs."""
+    return f"unknown verb {verb!r} — try /lens help (verbs: {', '.join(_PUBLIC_VERBS)})"
+
+
 def _usage_line(*, offender: str | None = None, missing: str | None = None) -> str:
     if offender:
         return f"unknown flag {offender!r} — showing usage\n{_USAGE}"
@@ -1355,7 +1379,10 @@ def _verb_hub(
     and degrades per-bundle when staged dirs vanish mid-render.
     """
     if args:
-        return _usage_line(offender=args[0])
+        # A flag is a flag; a bare token is most plausibly a mistyped verb.
+        if args[0].startswith("--"):
+            return _usage_line(offender=args[0])
+        return _unknown_verb_line(args[0])
     from .hubview import render_hub_view
 
     return render_hub_view(
@@ -1862,7 +1889,7 @@ def dispatch_verb(
         # Choir lane: downgrade-only, opt-in, outside the envelope.
         return _verb_second_opinion(args, view=view, cache=cache)
     elif verb == "doctor":
-        # §11.9 nine-check engine: operational surface — no pull banner.
+        # §11.9 ten-check engine: operational surface — no pull banner.
         return _verb_doctor(args, view=view, sink=sink)
     elif verb == "bones":
         # F-6 easter egg (hidden): opt-in by invocation; gags carry no pull
@@ -1872,7 +1899,7 @@ def dispatch_verb(
         # F-6 self-scan twin (hidden): same no-banner rule as bones.
         return _verb_self_scan(args, view=view)
     else:
-        return _usage_line(offender=verb)
+        return _unknown_verb_line(verb)
     banner = manager.banner_line()
     return f"{banner}\n{result}" if banner else result
 
@@ -1916,8 +1943,8 @@ def register_slash(
     owned_cache = cache if cache is not None else shared_cache()
     description = "Skill Lens — deterministic security reports for skill bundles (advisory)"
     args_hint = (
-        "scan|report|map|autopsy|baseline|explain-rules|diff|hub|watch|help"
-        " · flags: --json --no-cache --voice"
+        "scan|report|map|hub|watch|doctor|rules|baseline|explain-rules|diff"
+        "|autopsy|second-opinion|help · flags: --json --no-cache --voice"
     )
     handle = make_handler(view, owned_cache)
     registration = view.register_command(

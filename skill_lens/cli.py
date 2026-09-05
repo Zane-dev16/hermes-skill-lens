@@ -38,7 +38,7 @@ logger = logging.getLogger("lens")
 #: Output prefixes that map to §18 "total error" (exit 2) on the CLI lane.
 #: The slash lane renders these same strings as answers; here they decide
 #: process exit codes. Interim heuristic until the native argparse spec.
-_FAIL_PREFIXES = ("lens fail ", "unknown flag ", "/lens scan requires")
+_FAIL_PREFIXES = ("lens fail ", "unknown flag ", "unknown verb ", "/lens scan requires")
 
 _USAGE_MARKER = "— showing usage"
 
@@ -318,7 +318,7 @@ def setup_parser(parser: Any) -> None:
     p_diff.add_argument("--plain", action="store_true")
 
     p_doctor = subparsers.add_parser(
-        "doctor", help="§11.9 ten-check self-check (exit 0 on warnings; 2 on hard failures)"
+        "doctor", help="ten-check self-check (exit 0 on warnings, 2 on hard failures)"
     )
     # doctor carries --plain only: it has no verdict envelope to gate.
     p_doctor.add_argument("--plain", action="store_true")
@@ -366,7 +366,7 @@ def setup_parser(parser: Any) -> None:
     p_autopsy = subparsers.add_parser(
         "autopsy",
         help="deep narrative walkthrough (voices OPT-IN: clinical default, microscopy;"
-        " noir deferred per HQ O4)",
+        " voice 'noir' is deferred — shipped voices: clinical, microscopy)",
     )
     p_autopsy.add_argument("name")
     p_autopsy.add_argument("--voice", dest="voice", default=None)
@@ -408,7 +408,10 @@ def register_cli(view: Any, *, cache: Any = None) -> bool:
             help_text="Skill Lens — deterministic security reports for skill bundles",
             setup_fn=setup_parser,
             handler_fn=make_exiting_dispatcher(view, cache),
-            description="scan · report · baseline · explain-rules · diff (advisory only)",
+            description=(
+                "autopsy · baseline · diff · doctor · explain-rules · help · hub · map · "
+                "report · rules · scan · second-opinion · watch (advisory only)"
+            ),
         )
     except Exception:  # noqa: BLE001 — registration must never raise into the host
         logger.exception("Skill Lens: hermes-lens CLI registration failed")

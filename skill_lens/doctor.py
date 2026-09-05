@@ -637,7 +637,10 @@ def check_network_isolation(
                 (f"canned scan errored under guard (no socket attempt logged): {exc}",),
             )
 
-        if not isinstance(result, dict) or result.get("ok") is not True:
+        # Exact-True pin (not truthiness): only a real boolean True from the
+        # scan contract counts as a clean canned run — truthy junk degrades.
+        ok_value = result.get("ok")
+        if not isinstance(result, dict) or type(ok_value) is not bool or not ok_value:
             detail = "canned scan did not complete cleanly under guard"
             extra = "" if not isinstance(result, dict) else f": {result.get('error')!r}"
             return CheckResult(6, "network-isolation", title, WARN, (detail + extra,))
@@ -765,10 +768,17 @@ def check_parse_health() -> CheckResult:
     languages = snapshot.get("languages", {})
     failures = snapshot.get("consecutive_failures", {})
     overall = str(snapshot.get("status", "degraded"))
+
+    def _failure_count(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0  # junk counter degrades, never raises
+
     loops = sorted(
         f"{name}:{count}"
         for name, count in failures.items()
-        if int(count or 0) >= CRASH_LOOP_THRESHOLD
+        if _failure_count(count) >= CRASH_LOOP_THRESHOLD
     )
     degraded = sorted(name for name, info in languages.items() if info.get("status") != "active")
     detail = [
@@ -1045,7 +1055,9 @@ def _parse_check_profiles(profiles_root: Path, names: list[str]) -> list[str]:
             import yaml
 
             parsed = yaml.safe_load(config.read_text(encoding="utf-8"))
-            if parsed is not None and not isinstance(parsed, dict):
+            if parsed is None:
+                continue  # empty config — not a route-table fault
+            if not isinstance(parsed, dict):
                 broken.append(f"profile {name}: config.yaml is not a mapping")
         except Exception as exc:  # noqa: BLE001
             broken.append(f"profile {name}: config.yaml unparsable ({exc})")
@@ -1061,7 +1073,8 @@ def _probe_route_table(home: Path) -> str:
         return (
             f"route table: {len(aliases)} wrapper alias(es) parse-checked via hermes_cli.profiles"
         )
-    except Exception:  # noqa: BLE001 — outside the host process
+    except Exception as exc:  # noqa: BLE001 — outside the host process
+        logger.debug("host profiles module unreachable (%r); config-audit lane", exc)
         wrappers = Path(os.environ.get("HOME", str(Path.home()))) / ".local" / "bin"
         count = 0
         try:
@@ -1208,6 +1221,12 @@ def render_cli_panel(report: DoctorReport) -> str:
             row(f"    ↳ {extra}")
     lines.append(f"├{border}┤")
     row(report.verdict_line(), f"(exit {report.exit_code})")
+    if report.ok and not report.warnings:
+        # Self-exam wink (FUN-UX): the instrument owes itself an
+        # examination — but ONLY on a fully clean bill. Any warning or
+        # failure keeps the panel sober; the events.ndjson mirror never
+        # carries this line.
+        row("next: lens lens — the instrument owes you a self-exam")
     row("advisor only — lens never blocks installs; results → events.ndjson")
     lines.append(f"└{border}┘")
     return "\n".join(lines)

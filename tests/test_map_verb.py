@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from skill_lens.context import PluginContextView
+from skill_lens.ir import SkillIR
 from skill_lens.mapview import render_map_chat, render_map_panel
 from skill_lens.render import CHAT_HARD_BUDGET, COVERAGE_FOOTER
 from skill_lens.slash import dispatch_verb, reset_shared_cache
@@ -117,8 +118,7 @@ def test_map_ladder_persists_full_text_on_overflow() -> None:
     from skill_lens.render import report_hash8
 
     files = tuple(
-        FileRecord(path=f"scripts/mod_{i:03d}.py", size=4096, role="script")
-        for i in range(120)
+        FileRecord(path=f"scripts/mod_{i:03d}.py", size=4096, role="script") for i in range(120)
     )
     ir = SkillIR(
         identity=BundleIdentity(name="huge-bundle", category="tools"),
@@ -179,6 +179,39 @@ def test_dispatch_map_unknown_flag_gets_usage(view: PluginContextView) -> None:
 # ---------------------------------------------------------------------------
 # CLI panel + grammar parity (D-054 law: both lanes feed one dispatch)
 # ---------------------------------------------------------------------------
+
+
+def _scan_fixture() -> tuple[dict, SkillIR]:
+    from skill_lens.engines import scan_bundle
+    from skill_lens.report import build_report
+
+    result = scan_bundle(FIXTURE)
+    return build_report(result), result.ir
+
+
+def test_map_default_render_has_no_specimen_line(view: PluginContextView) -> None:
+    """Item 8: clinical/default map renders stay byte-identical (no specimen)."""
+    envelope, ir = _scan_fixture()
+    assert "Specimen mounted" not in render_map_chat(envelope, ir)
+    assert "Specimen mounted" not in render_map_chat(envelope, ir, voice="clinical")
+    assert render_map_chat(envelope, ir, voice="clinical") == render_map_chat(envelope, ir)
+
+
+def test_map_microscopy_voice_adds_specimen_tail_line(view: PluginContextView) -> None:
+    """Item 8: microscopy voice appends the specimen line to the map tail."""
+    envelope, ir = _scan_fixture()
+    name = str((envelope.get("target") or {}).get("name", ""))
+    body = render_map_chat(envelope, ir, voice="microscopy")
+    assert f"Specimen mounted; sections labeled — see Impression via /lens autopsy {name}." in body
+    # Head, graph, footer, and next-pointer all survive alongside it.
+    assert body.startswith("```\n") and body.rstrip().endswith("```")
+    assert COVERAGE_FOOTER in body
+    assert f"next: /lens autopsy {name} · /lens report" in body
+    # The default render is the microscopy render minus exactly that line.
+    default = render_map_chat(envelope, ir).splitlines()
+    micro = body.splitlines()
+    assert len(micro) == len(default) + 1
+    assert [line for line in micro if "Specimen mounted" not in line] == default
 
 
 def test_cli_panel_has_box_drawing_and_differs_from_chat() -> None:

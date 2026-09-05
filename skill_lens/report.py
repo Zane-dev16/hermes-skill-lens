@@ -21,9 +21,16 @@ from pathlib import Path
 from typing import Any
 
 from .baseline import apply_baselines
+from .claims import (
+    OverreachEvidence,
+    WeightNote,
+    build_overreach_reports,
+    overreach_record_to_dict,
+)
 from .engines import ScanResult
+from .engines.base import dict_sort_key
 from .ir import TOOL_NAME, tool_version
-from .scoring import score_findings
+from .scoring import ScoreResult, score_findings
 
 #: Envelope schema token (SPEC §12.3; additive growth stays inside report/1).
 REPORT_SCHEMA = "report/1"
@@ -59,6 +66,7 @@ def build_report(
         findings, _stats = apply_baselines(findings, baseline_entries, report_date=report_date)
     score = score_findings(findings)
     ir = result.ir
+    overreach_records, findings = _attach_overreach(ir, findings, score)
 
     return {
         "schema": REPORT_SCHEMA,
@@ -89,6 +97,11 @@ def build_report(
         "findings": findings,
         "suppressed_count": sum(1 for f in findings if f.get("suppressed")),
         "claims": [claim.to_dict() for claim in ir.claims],
+        # Wave C IMPROVE-ENVELOPE (additive): the claimed-vs-actual diff as
+        # machine slots + pre-rendered §9.3 explanations, and the full
+        # ingest/engine diagnostic mirror. Existing keys keep exact shape.
+        "overreach": overreach_records,
+        "diagnostics": [record.to_dict() for record in ir.diagnostics.snapshot()],
         "notes": list(ir.notes),
     }
 
@@ -96,6 +109,100 @@ def build_report(
 def _provenance_annotation(raw: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Annotation-only provenance passthrough (D-PROV: never read by math)."""
     return dict(raw) if raw is not None else None
+
+
+#: Finding severities the §9.3 weight line may name (pricing tiers).
+_WEIGHT_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+
+def _attach_overreach(
+    ir: Any,
+    findings: list[dict[str, Any]],
+    score: ScoreResult,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Claimed-vs-actual diff for the envelope (SPEC §9.2/§9.3 pipeline seam).
+
+    Returns ``(overreach_records, findings)``. Actual = capabilities of
+    ACTIVE (non-suppressed) findings with a non-empty capability:
+    suppression means a human/baseline accepted the behavior with reason,
+    so suppressed rows no longer accuse. Findings evidencing an undeclared
+    capability gain ``overreach: True`` plus the additive
+    ``overreach_basis`` slot the ``options:`` render row keys off —
+    scoring never reads either flag, so arithmetic is untouched. The
+    representative evidence per capability is its highest-priced active
+    finding (``score_math`` points, deterministic ``dict_sort_key``
+    tiebreak); its weight line rides the record so every number traces.
+    Pure function of scan output — no wall-clock, no randomness.
+    """
+    active = [
+        finding
+        for finding in findings
+        if not finding.get("suppressed", False) and str(finding.get("capability", ""))
+    ]
+    if not active:
+        return [], findings
+    points_by_id: dict[str, int] = {}
+    for row in score.score_math:
+        try:
+            points_by_id[row.finding] = int(row.points)
+        except (TypeError, ValueError):
+            continue
+    by_capability: dict[str, list[dict[str, Any]]] = {}
+    for finding in active:
+        by_capability.setdefault(str(finding.get("capability", "")), []).append(finding)
+    evidence: dict[str, OverreachEvidence] = {}
+    weights: dict[str, WeightNote] = {}
+    for capability in sorted(by_capability):
+        members = sorted(
+            by_capability[capability],
+            key=lambda item: (
+                -points_by_id.get(str(item.get("id", "")), 0),
+                dict_sort_key(item),
+            ),
+        )
+        best = members[0]
+        location = best.get("location") or {}
+        line = location.get("start_line")
+        evidence[capability] = OverreachEvidence(
+            path=str(location.get("path", "")),
+            line=line if isinstance(line, int) else None,
+            snippet=str(location.get("snippet", "")),
+        )
+        severity = str(best.get("severity", "") or "LOW")
+        if severity not in _WEIGHT_SEVERITIES:
+            severity = "LOW"
+        weights[capability] = WeightNote(
+            points=points_by_id.get(str(best.get("id", "")), 0),
+            severity=severity,
+            dynamic=not bool(best.get("static_only", False)),
+            declared=bool(best.get("declared", False)),
+        )
+    claims = list(ir.claims)
+    records = build_overreach_reports(claims, evidence, weights=weights)
+    basis_by_capability = {record.capability: record.basis for record in records}
+    record_dicts: list[dict[str, Any]] = []
+    for record in records:
+        ids = sorted(
+            str(finding.get("id", ""))
+            for finding in by_capability.get(record.capability, ())
+            if finding.get("id")
+        )
+        record_dicts.append(overreach_record_to_dict(record, ids))
+    flagged: list[dict[str, Any]] = []
+    for finding in findings:
+        basis = basis_by_capability.get(str(finding.get("capability", "")))
+        if (
+            basis is None
+            or finding.get("suppressed", False)
+            or not str(finding.get("capability", ""))
+        ):
+            flagged.append(finding)
+            continue
+        row = dict(finding)
+        row["overreach"] = True
+        row["overreach_basis"] = basis
+        flagged.append(row)
+    return record_dicts, flagged
 
 
 # ---------------------------------------------------------------------------

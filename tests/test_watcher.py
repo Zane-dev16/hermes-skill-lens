@@ -481,7 +481,9 @@ class TestThreadDiscipline:
 
         monkeypatch.setattr(w, "_cycle_once", flaky)
         w.start_polling()
-        time.sleep(0.25)  # ≥ several ticks: crash tick + recovery tick
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and calls["n"] < 2:
+            time.sleep(0.05)  # ≥ several ticks: crash tick + recovery tick
         w.shutdown(timeout=2.0)
         assert calls["n"] >= 2 and w.stats_snapshot()["errors"] >= 1
         assert not w.polling_active  # loop survived AND stopped cleanly

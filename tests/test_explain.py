@@ -45,8 +45,11 @@ def test_index_carries_pack_provenance_and_footer(tmp_path: Path) -> None:
     assert "profile street" in text
     assert "sources: built-in" in text
     assert COVERAGE_FOOTER in text
-    for rule in pack.rules:
-        assert rule.id in text  # the FULL effective set survives collapse
+    # At 51 rules the §11.3 ladder legitimately rests on the engine-counts
+    # rung (the id+capability compact rung no longer fits HARD) — the index
+    # still names every engine's share and points at per-rule cards.
+    assert f"{len(pack.rules)} rules (" in text
+    assert "index too wide for chat" in text
     assert len(text) <= CHAT_HARD_BUDGET
 
 
@@ -70,8 +73,12 @@ def test_index_marks_overrides_and_disabled(tmp_path: Path) -> None:
     pack = load_core_pack()
     text, _ = explain_rules(pack, _policy(tmp_path, body), plugin_data_dir=None)
     assert "overrides: 1 active · disabled: 1" in text
-    assert "LNS-MAN-001" in text and "DISABLED" in text
-    assert "overridden" in text
+    # Counts rung carries no per-rule rows at 51 rules — the markers live on
+    # the single-rule cards, which stay fully rendered at any pack size.
+    man_card, _ = explain_rules(pack, _policy(tmp_path, body), rule_id="LNS-MAN-001")
+    assert "DISABLED" in man_card
+    shl_card, _ = explain_rules(pack, _policy(tmp_path, body), rule_id="LNS-SHL-001")
+    assert "HIGH→LOW" in shl_card
 
 
 # ---------------------------------------------------------------------------

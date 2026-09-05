@@ -15,6 +15,7 @@ discord_spoilers default OFF, kill-switch beats flags.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from skill_lens.context import PluginContextView
@@ -109,7 +110,11 @@ def test_voice_register_is_exactly_clinical_and_microscopy() -> None:
 def test_noir_request_is_refused_usage_gated() -> None:
     error = validate_voice_choice("noir")
     assert error is not None
-    assert "deferred" in error and "O4" in error
+    # Byte-exact user copy (FUN-UX item 10): the fact and the way out.
+    assert re.fullmatch(r"voice 'noir' is deferred — shipped voices: clinical, microscopy", error)
+    # Internal rationale (HARD_QUESTIONS O4) lives in the source comment,
+    # never in user copy.
+    assert "O4" not in error and "usage-gated" not in error
     # Shipped choices pass; junk fails loudly.
     assert validate_voice_choice("clinical") is None
     assert validate_voice_choice("microscopy") is None

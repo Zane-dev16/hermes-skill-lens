@@ -368,3 +368,243 @@ def test_terminal_panel_differs_from_chat_and_stays_plain() -> None:
     assert panel.startswith("┌")
     assert "\x1b" not in panel
     assert COVERAGE_FOOTER in panel
+
+
+# ---------------------------------------------------------------------------
+# FUN-UX items 1-4 + 6: headline fusion, evidence/remediation rows, score
+# bar + gloss, clean-scan nudge
+# ---------------------------------------------------------------------------
+
+
+def test_worst_finding_fused_into_chat_headline() -> None:
+    """Item 1: the worst active finding rides the header via worst_findings."""
+    text = render_chat_compact(make_envelope())
+    assert "worst : ! WARN LNS-NET-011 posts data externally — scripts/sync.sh:42" in text
+    # Counts stay true totals beside the fused headline.
+    assert "findings: 1 warn 1 note" in text
+    # Suppressed-only scans fuse no worst line.
+    suppressed = make_envelope(
+        findings=[dict(f, suppressed=True) for f in make_envelope()["findings"]]
+    )
+    assert "worst :" not in render_chat_compact(suppressed)
+
+
+def test_evidence_row_first_finding_only_and_clipped() -> None:
+    """Item 2: ``reads :`` quotes the carried snippet, worst block only, ≤76."""
+    envelope = make_envelope()
+    envelope["findings"][0]["location"]["snippet"] = "s" * 200
+    envelope["findings"][1]["location"]["snippet"] = "t" * 200
+    text = render_chat_compact(envelope)
+    reads = [line for line in text.splitlines() if "reads :" in line]
+    assert len(reads) == 1
+    snippet = reads[0].split("reads : ", 1)[1]
+    assert len(snippet) <= 76
+    assert snippet.endswith("…")
+
+
+def test_evidence_row_respects_spoiler_wrap() -> None:
+    """Item 2: opt-in spoilers wrap the evidence row, never the head."""
+    envelope = make_envelope()
+    envelope["findings"][0]["location"]["snippet"] = "curl evil"
+    text = render_chat_compact(envelope, spoilers=True)
+    reads = next(line for line in text.splitlines() if "reads :" in line)
+    assert reads.strip().startswith("||") and reads.strip().endswith("||")
+    head = next(line for line in text.splitlines() if "LNS-NET-011" in line)
+    assert "||" not in head
+
+
+def test_remediation_row_renders_clipped() -> None:
+    """Item 3: every finding carries its ``fix :`` row, clipped ~100 chars."""
+    envelope = make_envelope()
+    envelope["findings"][0]["remediation"] = "r" * 200
+    text = render_chat_compact(envelope)
+    fix = [line for line in text.splitlines() if "fix   :" in line]
+    assert len(fix) == 1  # second finding has no remediation → no row
+    assert len(fix[0].split("fix   : ", 1)[1]) <= 100
+
+
+def test_score_bar_is_ten_cells_and_plain_ascii() -> None:
+    """Item 4: bar is a pure function of score.value; ASCII lane is local."""
+    from skill_lens.render import VERDICT_GLOSS, score_bar
+
+    assert score_bar(58) == "[██████░░░░]"
+    assert score_bar(58, plain=True) == "[######----]"
+    assert score_bar(0) == "[░░░░░░░░░░]"
+    assert score_bar(100) == "[██████████]"
+    assert score_bar(None) == "[░░░░░░░░░░]"  # junk degrades, never raises
+    # Gloss map covers exactly the scoring verdicts and never says safe.
+    from skill_lens.scoring import VERDICTS
+
+    assert set(VERDICT_GLOSS) == set(VERDICTS)
+    assert all("safe" not in gloss for gloss in VERDICT_GLOSS.values())
+    panel = render_terminal_panel(make_envelope(), plain=True)
+    assert "score [########--] 82/100 · verdict NOTICE — worth a skim" in panel
+
+
+def test_panel_fuses_worst_and_never_claims_safe() -> None:
+    """Items 1+4: panel carries worst line, bar, gloss — safety unclaimed.
+
+    The ONLY sanctioned 'safe' is the honesty disclaimer itself
+    (``clean scan ≠ safe skill``); no gloss or verdict may claim safety.
+    """
+    from skill_lens.render import ADVISOR_LINE
+
+    panel = render_terminal_panel(make_envelope())
+    assert "worst : ! WARN LNS-NET-011" in panel
+    assert "score [" in panel and "verdict NOTICE" in panel
+    stripped = [line.strip("│ ").rstrip() for line in panel.splitlines()]
+    assert [line for line in stripped if "safe" in line.lower()] == [ADVISOR_LINE]
+    clean = make_envelope(
+        score={
+            "value": 100,
+            "grade": "A",
+            "verdict": "clean",
+            "needs_review": False,
+            "ceilings_applied": [],
+            "score_math": [],
+        },
+        findings=[],
+    )
+    clean_panel = render_terminal_panel(clean)
+    # Long gloss wraps to an indented continuation row (box edge stays neat).
+    assert "— nothing detected — see coverage footer" in clean_panel
+    clean_stripped = [line.strip("│ ").rstrip() for line in clean_panel.splitlines()]
+    assert [line for line in clean_stripped if "safe" in line.lower()] == [ADVISOR_LINE]
+
+
+def test_clean_scan_nudge_keeps_findings_none_prefix() -> None:
+    """Item 6: clean scans nudge toward baseline; the pinned prefix holds."""
+    clean = make_envelope(
+        score={
+            "value": 100,
+            "grade": "A",
+            "verdict": "clean",
+            "needs_review": False,
+            "ceilings_applied": [],
+            "score_math": [],
+        },
+        findings=[],
+    )
+    text = render_chat_compact(clean)
+    line = next(line for line in text.splitlines() if line.startswith("findings:"))
+    assert line.startswith("findings: none")
+    assert "/lens baseline web-design-guidelines" in line
+
+
+# ---------------------------------------------------------------------------
+# Wave C IMPROVE-ENVELOPE: overreach header, diagnostics first-class,
+# options rows, panel §9.3 section
+# ---------------------------------------------------------------------------
+
+
+def _overreach_record(capability: str, basis: str = "contradicts_claim") -> dict[str, Any]:
+    return {
+        "capability": capability,
+        "basis": basis,
+        "claimed": None,
+        "evidence": {
+            "path": "scripts/sync.sh",
+            "line": 42,
+            "snippet": "curl evil",
+        },
+        "weight": {
+            "points": 40,
+            "severity": "CRITICAL",
+            "dynamic": True,
+            "declared": False,
+        },
+        "finding_ids": ["F-1"],
+        "explanation": (
+            f"OVERREACH: {capability}\n"
+            "  claimed : (nothing — description makes no capability statements)\n"
+            "  actual  : curl evil   [scripts/sync.sh:42]\n"
+            "  because : the bundle performs an upload the manifest never mentions\n"
+            "  weight  : −40 (CRITICAL, dynamic evidence, undeclared)"
+        ),
+    }
+
+
+def _diagnostic(
+    code: str = "LNS-ING-MANIFEST",
+    severity: str = "warning",
+    message: str = "no SKILL.md manifest found in bundle",
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "severity": severity,
+        "path": "SKILL.md",
+        "message": message,
+        "detail": {},
+    }
+
+
+def test_chat_carries_overreach_header_row_zero_and_nonzero() -> None:
+    """Wave C.1: the claimed-vs-actual diff rides the default chat surface."""
+    assert "overreach: 0 undisclosed" in render_chat_compact(make_envelope())
+    envelope = make_envelope(
+        overreach=[
+            _overreach_record("execute.shell"),
+            _overreach_record("network.send"),
+        ]
+    )
+    text = render_chat_compact(envelope)
+    assert "overreach: 2 undisclosed — execute.shell, network.send" in text
+    assert "overreach: 2 undisclosed — execute.shell, network.send" in render_terminal_panel(
+        envelope
+    )
+
+
+def test_chat_renders_loud_diagnostics_first_class() -> None:
+    """Wave C.3 (DX #11): ingest validation errors never read as clean."""
+    envelope = make_envelope(diagnostics=[_diagnostic()])
+    text = render_chat_compact(envelope)
+    assert "diag    : LNS-ING-MANIFEST warning — no SKILL.md manifest found" in text
+    panel = render_terminal_panel(envelope)
+    assert "LNS-ING-MANIFEST" in panel
+    # Info records stay in the JSON mirror only — human surfaces stay quiet.
+    quiet = make_envelope(
+        diagnostics=[_diagnostic(code="LNS-ENG-001", severity="info", message="note")]
+    )
+    assert "LNS-ENG-001" not in render_chat_compact(quiet)
+    assert "LNS-ENG-001" not in render_terminal_panel(quiet)
+    # Overflow pointer names the mirror when rows cap out.
+    many = make_envelope(diagnostics=[_diagnostic(message=f"m{i}") for i in range(9)])
+    assert "more diagnostics in --json" in render_chat_compact(many)
+
+
+def test_options_row_keys_off_overreach_basis() -> None:
+    """Wave C.2: per-instance fix suggestions ride overreach finding rows."""
+    contradicted = _finding("F-1", "LNS-NET-011", "HIGH", "posts data externally")
+    contradicted["overreach_basis"] = "contradicts_claim"
+    text = render_chat_compact(make_envelope(findings=[contradicted]))
+    options = [line for line in text.splitlines() if "options:" in line]
+    assert len(options) == 1
+    assert "fix the description + declare network.send" in options[0]
+    assert "suppress w/ reason (fingerprint " in options[0]
+    assert options[0].endswith("remove skill") or options[0].endswith("…")
+    # Vague bundles get the frontmatter-declaration ask (§6 honest case).
+    vague = _finding("F-2", "LNS-NET-011", "HIGH", "posts data externally")
+    vague["overreach_basis"] = "no-claims-made"
+    vague_text = render_chat_compact(make_envelope(findings=[vague]))
+    assert "declare capabilities in frontmatter" in vague_text
+    # Findings without the slot render no row — non-overreach bytes frozen.
+    plain = render_chat_compact(make_envelope())
+    assert "options:" not in plain
+    assert "options:" not in render_terminal_panel(make_envelope())
+    # Pathological capability names still clip deterministically.
+    wild = dict(contradicted, capability="x" * 200)
+    wild_text = render_chat_compact(make_envelope(findings=[wild]))
+    wild_row = next(line for line in wild_text.splitlines() if "options:" in line)
+    assert len(wild_row.strip()) <= 100 + len("      ")
+    assert wild_row.endswith("…")
+
+
+def test_panel_shows_overreach_section_with_explanation() -> None:
+    """Wave C.1: the terminal panel carries §9.3 explanations verbatim."""
+    envelope = make_envelope(overreach=[_overreach_record("network.send")])
+    panel = render_terminal_panel(envelope)
+    assert "OVERREACH: network.send" in panel
+    assert "the bundle performs an upload the manifest never mentions" in panel
+    assert "weight  : −40 (CRITICAL, dynamic evidence, undeclared)" in panel
+    # Zero case shows the header only — no phantom section.
+    assert "OVERREACH:" not in render_terminal_panel(make_envelope())

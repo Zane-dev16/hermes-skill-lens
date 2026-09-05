@@ -156,11 +156,15 @@ def _map_sections(
     layout = target.get("layout", "flat")
     title = str(target.get("name", "?"))
     where = f"{category}/{title}" if category else title
+    try:
+        total_bytes = int(target.get("total_bytes") or 0)
+    except (TypeError, ValueError):
+        total_bytes = 0  # junk size degrades, never raises
     head = [
         f"MAP · {title} ({where} · {layout})" if category else f"MAP · {title} ({layout})",
         f"bundle  : {_hash_head(target.get('bundle_hash'))} · "
         f"{target.get('file_count', 0)} files · "
-        f"{max(1, round(int(target.get('total_bytes') or 0) / 1024))} KB",
+        f"{max(1, round(total_bytes / 1024))} KB",
     ]
     prov = _provenance_bits(envelope)
     head.append(f"provenance: {prov} (annotation)" if prov else "provenance: none recorded")
@@ -192,8 +196,20 @@ def _assemble(
     *,
     pointer: str | None = None,
     name: str = "",
+    voice: str = "clinical",
 ) -> str:
+    """Fence *sections* with the tail block (never raises, never ANSI).
+
+    *voice* carries the resolved narration voice (feed
+    ``fun.resolve_voice(view, flag)[0]``); ONLY ``"microscopy"`` appends
+    the specimen tail line — clinical/default renders stay byte-identical.
+    """
     tail = [f"next: /lens autopsy {name} · /lens report".strip()]
+    if voice == "microscopy":
+        # The map mounts the specimen; the Impression lives in the autopsy
+        # dictation — point there, and only on the microscopy lane.
+        via = f" /lens autopsy {name}" if name else " /lens autopsy"
+        tail.append(f"Specimen mounted; sections labeled — see Impression via{via}.")
     if pointer:
         tail.insert(0, f"full map: {pointer}")
     sections = [*sections, tail]
@@ -208,20 +224,26 @@ def render_map_chat(
     *,
     plugin_data_dir: Path | str | None = None,
     soft_budget: int | None = None,
+    voice: str = "clinical",
 ) -> str:
     """Fenced collapsed map (§11.3 ladder; never raises, never emits ANSI).
 
     Rungs: full tree+claims → tree leaves dropped & claims capped →
-    head + capabilities graph + persisted-full pointer.
+    head + capabilities graph + persisted-full pointer. *voice* feeds the
+    tail specimen line (see :func:`_assemble`); the default keeps every
+    byte of the clinical render unchanged.
     """
     soft = CHAT_SOFT_BUDGET
     if soft_budget is not None:
-        soft = max(200, min(int(soft_budget), CHAT_HARD_BUDGET))
+        try:
+            soft = max(200, min(int(soft_budget), CHAT_HARD_BUDGET))
+        except (TypeError, ValueError):
+            soft = CHAT_SOFT_BUDGET  # junk budget degrades, never raises
     name = str((envelope.get("target") or {}).get("name", ""))
     full_sections = _map_sections(
         envelope, ir, tree_leaves=_TREE_LEAVES_FULL, claims_cap=_CLAIMS_FULL
     )
-    full_text = _assemble(full_sections, name=name)
+    full_text = _assemble(full_sections, name=name, voice=voice)
     if len(full_text) <= soft:
         return full_text
 
@@ -230,6 +252,7 @@ def render_map_chat(
             _map_sections(envelope, ir, tree_leaves=tree_leaves, claims_cap=claims_cap),
             pointer=pointer,
             name=name,
+            voice=voice,
         )
         return body
 
@@ -240,7 +263,7 @@ def render_map_chat(
     # Extreme overflow: keep the identity + graph, point at the artifact.
     minimal = _map_sections(envelope, ir, tree_leaves=0, claims_cap=0)
     kept = [minimal[0], minimal[-1]]
-    return _assemble(kept, pointer=pointer, name=name)
+    return _assemble(kept, pointer=pointer, name=name, voice=voice)
 
 
 def render_map_panel(envelope: Mapping[str, Any], ir: SkillIR) -> str:

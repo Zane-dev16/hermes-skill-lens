@@ -138,7 +138,51 @@ def test_microscopy_severity_words_render_verbatim() -> None:
     assert "Severity: CRITICAL." in body
     # Understatement register markers present, camp absent.
     assert "opacity noted at" in body
-    assert "Recommend higher magnification." in body
+    # Single HIGH+ finding closes with the lesion band (item 7).
+    assert "Impression: one lesion of consequence; treat before transplant." in body
+
+
+def test_microscopy_impression_bands_by_outcome() -> None:
+    """Item 7: the Impression line is a deterministic template by count band."""
+    # 0 findings → clean slide worth filing.
+    clean = render_autopsy(make_envelope(findings=[]), voice="microscopy")
+    assert "Impression: fields unremarkable. A clean slide is still a slide worth filing." in clean
+    # 1 HIGH+ finding → single lesion of consequence.
+    one_high = render_autopsy(
+        make_envelope(findings=[_finding("F-1", "LNS-NET-011", "HIGH", "posts data externally")]),
+        voice="microscopy",
+    )
+    assert "Impression: one lesion of consequence; treat before transplant." in one_high
+    # 1 MED/LOW finding → solitary blemish, filed and observed.
+    one_low = render_autopsy(
+        make_envelope(findings=[_finding("F-1", "LNS-MAN-004", "LOW", "vague description")]),
+        voice="microscopy",
+    )
+    assert "Impression: a solitary blemish of little consequence; file and observe." in (one_low)
+    # Many findings → catalogued foci with the exact count.
+    many = render_autopsy(make_envelope(), voice="microscopy")
+    assert "Impression: 2 foci catalogued; excise in severity order." in many
+    # Clinical voice never renders an Impression line.
+    assert "Impression:" not in render_autopsy(make_envelope(), voice="clinical")
+    assert "Impression:" not in render_autopsy(make_envelope(findings=[]))
+
+
+def test_microscopy_impression_carries_no_facts() -> None:
+    """Impression lines must not leak rule ids/severities/paths/confidences."""
+    for findings in (
+        [],
+        [_finding("F-1", "LNS-NET-011", "CRITICAL", "posts data externally")],
+        [
+            _finding("F-1", "LNS-NET-011", "HIGH", "posts data externally"),
+            _finding("F-2", "LNS-OBS-002", "MEDIUM", "base64 blob decoded at runtime"),
+        ],
+    ):
+        body = render_autopsy(make_envelope(findings=findings), voice="microscopy")
+        impression = next(line for line in body.splitlines() if line.startswith("Impression:"))
+        assert "LNS-" not in impression
+        assert not re.search(r"F-\d+", impression)
+        assert "scripts/sync.sh" not in impression
+        assert "confidence" not in impression
 
 
 def test_titles_survive_voices_verbatim() -> None:
