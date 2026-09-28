@@ -99,6 +99,9 @@ class ScanContext:
     #: Accepted community packs (SPEC §15 pin table; pre-verified by
     #: packpins.resolve_external_packs — the caller owns the trust decision).
     external_packs: tuple[Any, ...] = ()
+    #: Effective scan-time policy (already resolved at enqueue; applied in
+    #: build_report before baselines). None keeps historical behavior.
+    policy: Any | None = None
 
 
 @dataclass
@@ -227,6 +230,7 @@ def pipeline_runner(job: JobRecord) -> None:
         report_date=context.report_date,
         osv=getattr(context, "osv", False),
         external_packs=getattr(context, "external_packs", ()) or (),
+        policy=getattr(context, "policy", None),
     )
     if not outcome.get("ok"):
         raise ScanFailure(_one_line(str(outcome.get("error") or "scan failed")))

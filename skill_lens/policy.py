@@ -52,6 +52,7 @@ user data is sorted; pure functions throughout.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import ipaddress
 import os
 import re
@@ -470,6 +471,31 @@ class EffectivePolicy:
     def declared_offensive_unlocked(self) -> bool:
         """Lab unlocks declared-offensive handling; street ignores it."""
         return self.profile == "lab"
+
+    @property
+    def cache_suffix(self) -> str:
+        """Short deterministic digest of the behavior-changing policy slice.
+
+                Fold into fast-path cache keys wherever this policy is applied, so
+        a changed allow/deny list, override, disable, or profile can never be
+                served a stale envelope. "" when the policy is stock built-in."""
+        overrides = sorted(
+            (rule_id, override.severity, override.expires.isoformat() if override.expires else "")
+            for rule_id, override in self.severity_overrides.items()
+        )
+        payload = repr(
+            (
+                self.profile,
+                self.allow_hosts,
+                self.allow_ips,
+                self.deny_hosts,
+                sorted(self.disabled_rules),
+                overrides,
+            )
+        )
+        if payload == repr((DEFAULT_PROFILE, (), (), (), [], [])):
+            return ""
+        return ":pol" + hashlib.sha256(payload.encode()).hexdigest()[:12]
 
     # -- host classification (deny > allow > standard) --------------------------
 

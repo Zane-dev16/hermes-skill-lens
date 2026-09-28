@@ -267,9 +267,7 @@ def test_engine_isolation_finding_never_collected() -> None:
 
 
 def test_baseline_round_trip_end_to_end(tmp_path: Path) -> None:
-    bundle = _write_bundle(
-        tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS
-    )
+    bundle = _write_bundle(tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS)
     pack = load_core_pack()
 
     fresh = scan_bundle(bundle, pack)
@@ -297,9 +295,7 @@ def test_baseline_round_trip_end_to_end(tmp_path: Path) -> None:
 
 
 def test_scores_deterministic_given_same_inputs(tmp_path: Path) -> None:
-    bundle = _write_bundle(
-        tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS
-    )
+    bundle = _write_bundle(tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS)
     result = scan_bundle(bundle, load_core_pack())
     records = collect_baseline_records(result.findings)[:2]
     one = build_report(result, baseline_entries=records, report_date=REPORT_DATE)
@@ -311,9 +307,7 @@ def test_build_report_default_stays_byte_identical(tmp_path: Path) -> None:
     """No baseline args ⇒ historical envelope untouched (vectors law)."""
     from skill_lens.report import build_report as legacy_call
 
-    bundle = _write_bundle(
-        tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS
-    )
+    bundle = _write_bundle(tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS)
     result = scan_bundle(bundle, load_core_pack())
     plain = build_report(result)
     explicit = legacy_call(result, baseline_entries=())
@@ -322,34 +316,39 @@ def test_build_report_default_stays_byte_identical(tmp_path: Path) -> None:
 
 
 def test_resolve_layers_merge_store_and_policy(tmp_path: Path) -> None:
-    bundle = _write_bundle(
-        tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS
-    )
+    bundle = _write_bundle(tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS)
     write_baseline(
         baseline_path_for(bundle),
         [BaselineRecord(fingerprint=FP_A, reason="store entry")],
     )
-    # Hand-authored [[baseline]] table rides the project overlay NEXT TO
-    # the target: <bundle>/.lens/policy.toml.
-    lens_dir = bundle / ".lens"
-    lens_dir.mkdir(parents=True, exist_ok=True)
-    policy_body = (
+    # Explicit [[baseline]] tables still merge via extra_files (explicit
+    # user trust act), while a policy.toml shipped INSIDE the scanned
+    # target is ignored (R1: skills must not soften their own scans).
+    extra = tmp_path / "explicit-policy.toml"
+    extra.write_text(
         "[[baseline]]\n"
         f'fingerprint = "{FP_B}"\n'
         'reason = "hand written"\n'
-        f"expires = {FUTURE.isoformat()}\n"
+        f"expires = {FUTURE.isoformat()}\n",
+        encoding="utf-8",
     )
-    (lens_dir / "policy.toml").write_text(policy_body, encoding="utf-8")
-    resolved = resolve_baseline_entries(target_dir=bundle, global_path=tmp_path / "no-global")
+    lens_dir = bundle / ".lens"
+    lens_dir.mkdir(parents=True, exist_ok=True)
+    (lens_dir / "policy.toml").write_text(
+        '[[baseline]]\nfingerprint = "shipped-with-skill"\nreason = "attacker seeded"\n',
+        encoding="utf-8",
+    )
+    resolved = resolve_baseline_entries(
+        target_dir=bundle, extra_files=[extra], global_path=tmp_path / "no-global"
+    )
     fingerprints = {record.fingerprint for record in resolved}
     assert FP_A in fingerprints  # canonical store layer
-    assert FP_B in fingerprints  # policy-layer [[baseline]] table
+    assert FP_B in fingerprints  # explicit extra_files layer
+    assert "shipped-with-skill" not in fingerprints  # R1: target policy ignored
 
 
 def test_resolve_propagates_policy_error_for_broken_store(tmp_path: Path) -> None:
-    bundle = _write_bundle(
-        tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS
-    )
+    bundle = _write_bundle(tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS)
     store = baseline_path_for(bundle)
     store.parent.mkdir(parents=True, exist_ok=True)
     store.write_text("[[baseline]]\nreason = 'missing fingerprint'\n", encoding="utf-8")
@@ -473,9 +472,7 @@ def test_slash_baseline_rejects_bad_date_without_writing(tmp_path: Path) -> None
         def state(self):
             return type("S", (), {"data_dir": tmp_path})()
 
-    bundle = _write_bundle(
-        tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS
-    )
+    bundle = _write_bundle(tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS)
     handler = make_handler(PluginContextView(Ctx()), FastPathCache())
     answer = handler(f'baseline "{bundle}" --reason r --expires not-a-date')
     assert "unparsable --expires" in answer
@@ -537,9 +534,7 @@ def test_slash_baseline_refreshes_cached_report(tmp_path: Path) -> None:
 
 def test_scan_result_replace_seam(tmp_path: Path) -> None:
 
-    bundle = _write_bundle(
-        tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS
-    )
+    bundle = _write_bundle(tmp_path, name="baselined-skill", skill_md=_SKILL_MD, scripts=_SCRIPTS)
     result = scan_bundle(bundle, load_core_pack())
     trimmed = replace(result, findings=result.findings[:1])
     assert len(trimmed.findings) == 1

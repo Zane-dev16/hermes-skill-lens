@@ -69,7 +69,12 @@ def test_malformed_policy_is_exit_two(tmp_path: pathlib.Path) -> None:
     target = tmp_path / "broken"
     shutil.copytree(BENIGN, target)
     (target / ".lens").mkdir()
-    (target / ".lens" / "policy.toml").write_text("profile = [\n", encoding="utf-8")
+    # R1: a policy.toml shipped in the target is never read, so the strict
+    # lane is exercised via the canonical store instead — malformed
+    # baseline.toml is still a PolicyError (never a silent skip).
+    (target / ".lens" / "baseline.toml").write_text(
+        "[[baseline]]\nreason = 'missing fingerprint'\n", encoding="utf-8"
+    )
     # PolicyError is CAUGHT inside build_cli_handler (A1 seam) and mapped to
     # the §18 total-error code — main RETURNS 2, never explodes.
     assert main(["scan", str(target)]) == 2

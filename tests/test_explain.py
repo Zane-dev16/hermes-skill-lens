@@ -275,7 +275,11 @@ def test_cli_malformed_policy_exits_two(tmp_path: Path, capsys: pytest.CaptureFi
     )
     lens_dir = bundle / ".lens"
     lens_dir.mkdir()
-    (lens_dir / "policy.toml").write_text("[rules\nbroken = yes\n", encoding="utf-8")
+    # R1: target policy.toml is never read; the strict lane is exercised
+    # via the canonical store (malformed baseline.toml ⇒ PolicyError).
+    (lens_dir / "baseline.toml").write_text(
+        "[[baseline]]\nreason = 'missing fingerprint'\n", encoding="utf-8"
+    )
 
     parser = argparse.ArgumentParser()
     setup_parser(parser)
@@ -300,7 +304,10 @@ def test_slash_lane_same_fault_renders_one_line_notice(
     bundle.mkdir()
     lens_dir = bundle / ".lens"
     lens_dir.mkdir()
-    (lens_dir / "policy.toml").write_text("[rules\nbroken = yes\n", encoding="utf-8")
+    # R1: see test_cli_malformed_policy_exits_two — strict lane via store.
+    (lens_dir / "baseline.toml").write_text(
+        "[[baseline]]\nreason = 'missing fingerprint'\n", encoding="utf-8"
+    )
 
     class Ctx(CliCtx):
         pass

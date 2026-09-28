@@ -478,8 +478,11 @@ def resolve_baseline_entries(
     """Full effective baseline set for one target (STRICT config lane).
 
     Layers, later wins: canonical store at ``<target_dir>/.lens/baseline.toml``
-    then every policy-layer ``[[baseline]]`` table (settings/global/project/
-    extras) resolved via :func:`skill_lens.policy.load_policy`. Raises
+    then every policy-layer ``[[baseline]]`` table (settings/global/extras)
+    resolved via :func:`skill_lens.policy.load_policy`. The scanned target's
+    own ``.lens/policy.toml`` is NEVER loaded (R1: a skill must not soften
+    its own scan — project-local policy applies only via explicit
+    ``--policy``/extras). Raises
     :class:`PolicyError` for broken configuration (verbs map that to exit-2 /
     one-line notice — malformed suppression metadata must never silently
     stop suppressing).
@@ -493,7 +496,7 @@ def resolve_baseline_entries(
 
     policy = load_policy(
         ctx=view,
-        project_dir=target_dir,
+        project_dir=None,  # R1: never auto-load policy from the scanned target
         extra_files=extra_files,
         global_path=global_path,
         report_date=report_date,

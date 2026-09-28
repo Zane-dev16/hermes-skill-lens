@@ -208,8 +208,9 @@ def _baseline_state(
 
     Raises :class:`PolicyError` on broken configuration (strict lane —
     malformed suppression metadata must never silently stop suppressing).
-    The project layer resolves against the TARGET's directory: an installed
-    skill or bundle dir carries its own ``.lens/`` config.
+    R1: only the canonical store (``<target>/.lens/baseline.toml``, written
+    by the explicit ``baseline`` trust verb) is read from the target — the
+    target's own ``.lens/policy.toml`` never loads as a policy layer.
     """
     if view is None:
         return (), ""
@@ -220,6 +221,18 @@ def _baseline_state(
     report_date = _today()
     records = resolve_baseline_entries(view=view, target_dir=target_dir, report_date=report_date)
     return records, baseline_cache_suffix(records, report_date=report_date)
+
+
+def _policy_state(view: PluginContextView | None) -> tuple[Any, str]:
+    """Effective scan-time policy + cache-key suffix (R1-safe layers only).
+
+    Raises :class:`PolicyError` on broken configuration, same strict lane
+    as :func:`_baseline_state`. The suffix keeps policy edits from serving
+    stale fast-path envelopes."""
+    from .policy import load_policy
+
+    policy = load_policy(ctx=view, report_date=_today())  # may raise PolicyError
+    return policy, policy.cache_suffix
 
 
 def _scan_raw(target_path: Path) -> Any:
@@ -250,6 +263,7 @@ def run_scan(
     report_date: date | None = None,
     osv: bool = False,
     external_packs: tuple[Any, ...] = (),
+    policy: Any | None = None,
 ) -> dict[str, Any]:
     """One full pipeline pass; returns render inputs, never raises.
 
@@ -297,7 +311,9 @@ def run_scan(
             "error": None,
         }
 
-    envelope = build_report(result, baseline_entries=baseline_records, report_date=report_date)
+    envelope = build_report(
+        result, baseline_entries=baseline_records, report_date=report_date, policy=policy
+    )
     if osv:
         try:
             # LAZY IMPORT (G1/G3): skill_lens.enrich.osv joins the process
@@ -435,8 +451,12 @@ def _verb_scan(
     baseline_records, key_suffix = _baseline_state(view, target_path)
     from .packpins import resolve_external_packs
 
-    external = resolve_external_packs(project_dir=target_path)
+    # R1: the scanned target never supplies its own trust config — pins
+    # resolve from the global + CWD tables only, never <target>/.lens/.
+    external = resolve_external_packs()
     key_suffix = key_suffix + external.cache_suffix
+    policy, policy_suffix = _policy_state(view)
+    key_suffix = key_suffix + policy_suffix
 
     def _out(text: str) -> str:
         """Prepend the loud per-pack notices (rejected/warned/inert)."""
@@ -506,6 +526,7 @@ def _verb_scan(
             cache=cache,
             osv=osv,
             external_packs=external.packs,
+            policy=policy,
         ),
     )
     if decision.coalesced:
@@ -957,15 +978,17 @@ def _fresh_envelope(
         if external is None:
             from .packpins import resolve_external_packs
 
-            external = resolve_external_packs(project_dir=target_path)
+            external = resolve_external_packs()  # R1: never <target>/.lens/
+        policy, policy_suffix = _policy_state(view)
         outcome = run_scan(
             target_path,
             cache=cache,
             plugin_data_dir=view.plugin_data_dir(),
             baseline_records=baseline_records,
-            key_suffix=key_suffix + external.cache_suffix,
+            key_suffix=key_suffix + external.cache_suffix + policy_suffix,
             report_date=_today(),
             external_packs=external.packs,
+            policy=policy,
         )
     except PolicyError:
         # Config seam ⇒ surface lane decides (notice vs exit 2).

@@ -47,6 +47,7 @@ def build_report(
     policy_sources: tuple[str, ...] | None = None,
     baseline_entries: Sequence[Any] = (),
     report_date: date | None = None,
+    policy: Any | None = None,
 ) -> dict[str, Any]:
     """Assemble the ``report/1`` envelope from a :class:`ScanResult`.
 
@@ -62,6 +63,11 @@ def build_report(
     arguments preserve byte-identical historical behavior (golden vectors).
     """
     findings: list[dict[str, Any]] = list(result.findings)
+    if policy is not None:
+        # Policy allow/deny + severity overrides run BEFORE baselines (the
+        # order apply_baselines assumes: allow-matched rows arrive already
+        # suppressed). None (default) preserves historical behavior exactly.
+        findings, _policy_diags = policy.apply(findings, report_date=report_date)
     if baseline_entries:
         findings, _stats = apply_baselines(findings, baseline_entries, report_date=report_date)
     score = score_findings(findings)
